@@ -1,0 +1,137 @@
+.ui-labels {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 3px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: text;
+}
+.ui-labels:focus-within {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.ui-labels-chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.ui-labels-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 2px 1px 6px;
+  border-radius: 999px;
+  background: var(--grey-bg);
+  color: var(--grey-fg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  outline: none;
+}
+.ui-labels-chip:focus-within,
+.ui-labels-chip[data-highlighted] {
+  outline: 2px solid var(--accent);
+}
+.ui-labels-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ui-labels-remove:hover,
+.ui-labels-remove:focus-visible {
+  background: var(--border-strong);
+  outline: none;
+}
+.ui-labels-input {
+  flex: 1;
+  min-width: 10em;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.ui-labels-input::placeholder {
+  color: var(--fg-muted);
+  opacity: 0.8;
+}
+.ui-labels-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-2);
+}
+.ui-labels-popup {
+  width: var(--anchor-width);
+  max-width: var(--available-width);
+  max-height: min(22rem, var(--available-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  font-size: 13px;
+}
+.ui-labels-empty {
+  padding: 6px 10px;
+  color: var(--fg-muted);
+}
+.ui-labels-empty:empty {
+  display: none;
+}
+.ui-labels-item {
+  display: grid;
+  grid-template-columns: 1rem auto minmax(0, 1fr);
+  grid-template-areas:
+    "check swatch name"
+    ". . description";
+  align-items: center;
+  gap: 0 6px;
+  padding: 4px 10px;
+  cursor: default;
+  user-select: none;
+}
+.ui-labels-item[data-highlighted] {
+  background: var(--surface-2);
+}
+.ui-labels-indicator {
+  grid-area: check;
+  color: var(--accent);
+}
+.ui-labels-item > .ui-labels-swatch {
+  grid-area: swatch;
+}
+.ui-labels-name {
+  grid-area: name;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ui-labels-description {
+  grid-area: description;
+  color: var(--fg-muted);
+  font-size: 12px;
+}

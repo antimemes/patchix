@@ -1,0 +1,199 @@
+.jobs-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--blue-fg);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.jobs-strip-title {
+  font-size: 13px;
+}
+.jobs-strip-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: 8px;
+}
+.job {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.campaign-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.task-notes {
+  min-width: 12em;
+  max-width: 28em;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: normal;
+}
+.task-checks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.task-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.task-title h1 {
+  font-family: var(--mono);
+  font-size: 17px;
+  overflow-wrap: anywhere;
+}
+
+.run-list td:first-child {
+  width: 1px;
+}
+.run-list .ui-button {
+  font-family: var(--mono);
+  font-weight: 500;
+}
+.commits {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.commit-message {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--border-strong);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.findings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.findings li {
+  padding: 3px 6px;
+  border-left: 3px solid var(--amber-fg);
+  background: var(--amber-bg);
+  overflow-wrap: anywhere;
+}
+.findings .mono {
+  color: var(--fg-muted);
+}
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.ask-question {
+  padding-left: 8px;
+  border-left: 3px solid var(--border-strong);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pr-done {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--purple-fg);
+  border-radius: var(--radius);
+  background: var(--purple-bg);
+}
+.pr-done--merged {
+  border-color: var(--muted-green-fg);
+  background: var(--muted-green-bg);
+}
+.pr-done--closed {
+  border-color: var(--muted-red-fg);
+  background: var(--muted-red-bg);
+}
+/* The tick box above the pull request button. Its text can have two lines. */
+.publish-confirm {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.publish-confirm .ui-checkbox {
+  margin-top: 2px;
+}
+/* A part of a panel, below a line. */
+.subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* The `Publish` tab: the editor on the left and the preview on the right. Below 1000px, the preview goes below the editor. */
+.publish {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (min-width: 1000px) {
+  .publish {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .publish-preview {
+    position: sticky;
+    top: 52px;
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+  }
+}
+.campaign-filter {
+  flex: 1 1 12rem;
+  max-width: 20rem;
+}
+/* The marks of the newest run go on more lines when necessary. Thus the table does not become wider than the page. */
+.table td.run-cell {
+  min-width: 9rem;
+  white-space: normal;
+}
+
+.jobs-queue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.jobs-queue-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.settings-form {
+  max-width: 32rem;
+}

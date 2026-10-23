@@ -1,0 +1,43 @@
+.ui-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ui-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  padding: 1px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: background-color 120ms;
+}
+.ui-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ui-switch[data-checked] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.ui-switch[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.ui-switch-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  transition: translate 120ms;
+}
+.ui-switch-thumb[data-checked] {
+  translate: 12px 0;
+  background: var(--on-accent);
+}

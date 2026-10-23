@@ -1,0 +1,28 @@
+.ui-notice {
+  padding: 6px 10px;
+  border: 1px solid;
+  border-radius: var(--radius);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ui-notice--error {
+  border-color: var(--red-fg);
+  background: var(--red-bg);
+  color: var(--red-fg);
+}
+.ui-notice--warning {
+  border-color: var(--amber-fg);
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+.ui-notice--info {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--fg-muted);
+}
+.ui-notice--success {
+  border-color: var(--green-fg);
+  background: var(--green-bg);
+  color: var(--green-fg);
+}

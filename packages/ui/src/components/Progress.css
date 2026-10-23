@@ -1,0 +1,43 @@
+.ui-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 4rem;
+}
+.ui-progress-label {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.ui-progress-track {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+.ui-progress-indicator {
+  height: 100%;
+  background: var(--blue-fg);
+  transition: width 200ms;
+}
+.ui-progress-indicator[data-indeterminate] {
+  position: absolute;
+  width: 35%;
+  animation: ui-progress-slide 1.3s ease-in-out infinite;
+}
+@keyframes ui-progress-slide {
+  from {
+    left: -35%;
+  }
+  to {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-progress-indicator[data-indeterminate] {
+    left: 0;
+    width: 100%;
+    animation: none;
+    opacity: 0.5;
+  }
+}

@@ -1,0 +1,99 @@
+# https://taskfile.dev — `task` lists the tasks. The shell of shell.nix supplies the tools.
+version: "3"
+
+vars:
+  PORT: "8788"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  install:
+    desc: Install the dependencies
+    cmds:
+      - pnpm install
+
+  typecheck:
+    desc: Examine the types of all packages
+    cmds:
+      - pnpm -r typecheck
+
+  test:
+    desc: Test all packages
+    cmds:
+      - pnpm -r test
+
+  lint:
+    desc: Examine the text with memelint
+    cmds:
+      - memelint check
+
+  check:
+    desc: Types, tests and text
+    cmds:
+      - task: typecheck
+      - task: test
+      - task: lint
+
+  build:
+    desc: Build the web client
+    cmds:
+      - pnpm --filter @patchix/ui build
+
+  dev:
+    desc: Build the web client again on each change
+    cmds:
+      - pnpm --filter @patchix/ui dev
+
+  storybook:
+    desc: Start Storybook
+    cmds:
+      - pnpm --filter @patchix/ui storybook
+
+  start:
+    desc: "Build the web client and start the server (http://127.0.0.1:{{.PORT}}/)"
+    deps: [build]
+    cmds:
+      - node packages/server/src/main.ts --port {{.PORT}}
+
+  sync:
+    desc: "Read the issue of a campaign: task sync -- cacert"
+    cmds:
+      - node packages/fleet/src/cli.ts sync {{.CLI_ARGS}}
+
+  run:
+    desc: "Start one run: task run -- cacert <attr>"
+    cmds:
+      - node packages/fleet/src/cli.ts run {{.CLI_ARGS}}
+
+  fleet:
+    desc: "Start the fleet of a campaign: task fleet -- cacert"
+    cmds:
+      - node packages/fleet/src/cli.ts fleet {{.CLI_ARGS}}
+
+  worktree:
+    desc: "Make a worktree for a person: task worktree -- cacert <attr>"
+    cmds:
+      - node packages/fleet/src/cli.ts worktree {{.CLI_ARGS}}
+
+  base:
+    desc: "Update the base of a campaign: task base -- cacert"
+    cmds:
+      - node packages/fleet/src/cli.ts base {{.CLI_ARGS}}
+
+  adopt:
+    desc: "Adopt a branch of the fork: task adopt -- cacert <attr>"
+    cmds:
+      - node packages/fleet/src/cli.ts adopt {{.CLI_ARGS}}
+
+  import:
+    desc: "Import the branches of a repository: task import -- cacert file:///path/to/nixpkgs --descriptions /path/to/nixpkgs/issues"
+    cmds:
+      - node packages/fleet/src/cli.ts import {{.CLI_ARGS}}
+
+  refresh:
+    desc: "Read the pull request states of a campaign: task refresh -- cacert"
+    cmds:
+      - node packages/fleet/src/cli.ts refresh {{.CLI_ARGS}}

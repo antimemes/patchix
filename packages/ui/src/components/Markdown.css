@@ -1,0 +1,166 @@
+/* The Markdown preview: it shows a pull request description almost as GitHub shows it. */
+.ui-markdown {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ui-markdown > :first-child {
+  margin-top: 0;
+}
+.ui-markdown > :last-child {
+  margin-bottom: 0;
+}
+.ui-markdown p,
+.ui-markdown ul,
+.ui-markdown ol,
+.ui-markdown pre,
+.ui-markdown table,
+.ui-markdown blockquote,
+.ui-markdown details,
+.ui-markdown .md-alert {
+  margin: 0 0 12px;
+}
+.ui-markdown h1,
+.ui-markdown h2,
+.ui-markdown h3,
+.ui-markdown h4 {
+  margin: 20px 0 10px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ui-markdown h1 {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.6em;
+}
+.ui-markdown h2 {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.3em;
+}
+.ui-markdown h3 {
+  font-size: 1.1em;
+}
+.ui-markdown h4 {
+  font-size: 1em;
+}
+.ui-markdown a {
+  color: var(--accent);
+}
+.ui-markdown ul,
+.ui-markdown ol {
+  padding-left: 2em;
+}
+.ui-markdown li + li {
+  margin-top: 2px;
+}
+.ui-markdown li > ul,
+.ui-markdown li > ol {
+  margin: 2px 0 0;
+}
+/* A task list item: the tick box replaces the list mark. */
+.ui-markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.ui-markdown li > input[type="checkbox"] {
+  margin: 0 0.3em 0.2em -1.4em;
+  vertical-align: middle;
+}
+.ui-markdown hr {
+  height: 2px;
+  margin: 16px 0;
+  border: 0;
+  background: var(--border);
+}
+.ui-markdown code {
+  padding: 0.15em 0.35em;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.86em;
+}
+.ui-markdown pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.ui-markdown pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+  white-space: pre;
+}
+.ui-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ui-markdown th,
+.ui-markdown td {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+.ui-markdown th {
+  background: var(--surface);
+  font-weight: 600;
+}
+.ui-markdown tbody tr:nth-child(2n) td {
+  background: var(--surface);
+}
+.ui-markdown blockquote {
+  padding: 0 12px;
+  border-left: 4px solid var(--border-strong);
+  color: var(--fg-muted);
+}
+.ui-markdown details {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.ui-markdown details[open] > summary {
+  margin-bottom: 8px;
+}
+.ui-markdown summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.ui-markdown img {
+  max-width: 100%;
+}
+.md-alert {
+  --alert: var(--blue-fg);
+  padding: 6px 12px;
+  border-left: 4px solid var(--alert);
+}
+.md-alert > :last-child {
+  margin-bottom: 0;
+}
+.ui-markdown .md-alert-title {
+  margin-bottom: 4px;
+  color: var(--alert);
+  font-weight: 600;
+}
+.md-alert-title::before {
+  content: "\24D8\00A0";
+}
+.md-alert--tip {
+  --alert: var(--green-fg);
+}
+.md-alert--important {
+  --alert: var(--purple-fg);
+}
+.md-alert--warning {
+  --alert: var(--amber-fg);
+}
+.md-alert--warning .md-alert-title::before,
+.md-alert--caution .md-alert-title::before {
+  content: "\26A0\00A0";
+}
+.md-alert--caution {
+  --alert: var(--red-fg);
+}

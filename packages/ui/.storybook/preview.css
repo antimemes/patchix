@@ -1,0 +1,8 @@
+.story-note {
+  margin: 0 0 12px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-size: 13px;
+}

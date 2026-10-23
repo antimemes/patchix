@@ -1,0 +1,68 @@
+#:schema https://raw.githubusercontent.com/antimemes/memelint/main/crates/memelint/memelint.schema.json
+# The `strict` profile applies to all files. Start the check with `memelint check`.
+# The descriptions of a campaign have their own configuration: campaigns/<name>/memelint.toml.
+profile = "strict"
+check = false
+words = [
+  "GitHub", "memelint", "nixpkgs", "patchix", "pnpm", "direnv", "nix", "Nix", "NixOS", "Nix store", "flake", "schema", "schemas", "git", "gh",
+  "tab", "tabs", "shallow clone", "clone", "fetch", "subcommand", "subcommands", "Base UI", "Storybook", "story", "stories", "editor", "remark", "remarks",
+  "base", "tip", "adopt", "adopts", "update", "updates",
+  "cacert", "fix", "fixes", "fixed", "description", "descriptions", "title", "titles", "state", "states", 
+  "review notes", "extra words", "technical name", "technical names", "curated", "remote", "remotes", "web page", "page",
+  "disclosure", "vendored", "words", "web", "review", "reviews", "tick box", "tick boxes", "AI policy",
+  "ask", "asks", "question", "questions", "reply", "replies", "zellij", "session", "sessions", "ground truth", "video", "tour", "discloses",
+  "settings",
+]
+
+[scopes.docs]
+paths = ["AGENTS.md", "campaigns/", "docs/"]
+check = true
+words = [
+  "hierarchies", "documents", "yourself", "small fix", "things", "what", "format", "formats", "specification", "comment", "comments",
+  "specifications", "product", "products", "fleet", "fleets", "incident",
+  "agent", "agents", "fleet", "fleets", "campaign", "campaigns", "task", "tasks", "run", "runs", "job", "jobs",
+  "runner", "worktree", "worktrees", "checkout", "branch", "branches", "fork", "upstream", "commit", "commits", "diff",
+  "pull request", "pull requests", "pull request description", "AI disclosure", "label", "labels", "issue", "issues",
+  "tracking issue", "tracking issues", "sub-tracking issues", "task list", "entry", "entries", "merge-base",
+  "package", "packages", "attribute", "attributes", "trust store", "trust stores", "certificate", "certificates",
+  "root", "roots", "chain", "chains", "bundle", "bundled", "Sectigo", "eMudhra", "cross-signed", "keystore", "keystores",
+  "symlink", "archive", "wheel", "jar", "patch", "inputs", "paragraph", "paragraphs", "heading", "mark", "marks",
+  "backticks", "dictionary", "profile", "template", "prompt", "prompts", "model", "render", "renderer", "web page",
+  "button", "server", "client", "shell", "schema", "verdict", "draft", "Claude Code", "Claude Fable", "Claude Opus",
+  "Simplified Technical English", "nix-cacert-harness", "ASD-STE100", "Markdown", "YAML", "JSON", "HTML", "CA",
+  "active voice", "infinitive", "verb", "sentence", "sentences", "word", "words", "expression", "expressions",
+  "alternative", "approved", "substituteInPlace", "postInstall", "postFixup", "postPatch", "Java", "Python", "Ruby",
+  "live test", "numbers", "record", "the smallest", "second", "minute", "minutes", "hour", "hours",
+]
+
+[scopes.code]
+paths = ["packages/"]
+check = true
+words = [
+  "agent", "agents", "fleet", "campaign", "campaigns", "task", "tasks", "run", "runs", "job", "jobs", "runner",
+  "worktree", "worktrees", "checkout", "branch", "branches", "fork", "upstream", "commit", "commits", "diff", "merge-base",
+  "pull request", "pull requests", "pull request description", "AI disclosure", "label", "labels", "issue", "issues",
+  "tracking issue", "sub-tracking issues", "task list", "entry", "entries", "package", "packages", "attribute", "attributes",
+  "trust store", "certificate", "root", "chain", "bundle", "bundled", "eMudhra", "keystore", "symlink", "archive", "wheel",
+  "jar", "patch", "paragraph", "heading", "mark", "marks", "backticks", "profile", "template", "prompt", "prompts", "model",
+  "render", "rendered", "renderer", "button", "server", "client", "shell", "schema", "verdict", "draft", "Claude Code",
+  "Claude Fable", "Claude Opus", "nix-cacert-harness", "Markdown", "YAML", "JSON", "HTML", "CA", "em dash",
+  "zod", "Hono", "React", "esbuild", "TypeScript", "Node", "localStorage", "URL", "id", "ids", "regular expression",
+  "nullable", "header", "route", "routes", "status", "stream", "queue", "queued", "lock", "timeout", "spawn", "signal",
+  "stdout", "stderr", "sh", "gh", "git", "nix", "SSE", "event", "events", "watcher", "parser", "preview", "reviewer",
+  "reviewers", "editor", "textarea", "panel", "tab", "tabs", "chip", "chips", "placeholder", "sync", "boolean", "integer",
+  "string", "strings", "array", "arrays", "map", "object", "objects", "key", "keys", "value", "values", "index", "default",
+  "defaults", "regex", "config", "env", "environment", "directory", "directories", "file", "files", "path", "paths", "line",
+  "lines", "text", "second", "seconds", "minute", "minutes", "hour", "hours", "ok", "cwd", "stdin", "exit code",
+  "live test", "finding", "findings", "review", "review note", "sidebar", "layout", "font", "theme", "viewport",
+]
+
+[scopes.ui]
+paths = ["packages/ui/"]
+check = true
+words = ["CSS", "React", "Storybook", "Base UI"]
+
+[scopes.nix]
+paths = ["flake.nix", "shell.nix", "default.nix", "nix/"]
+check = true
+words = ["flake", "esbuild", "Chromium", "Linux"]

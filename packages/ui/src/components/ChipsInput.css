@@ -1,0 +1,51 @@
+.ui-chips-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.ui-chips-input:focus-within {
+  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+}
+.ui-chips-input-chip {
+  padding-right: 2px;
+  font-weight: 500;
+}
+.ui-chips-input-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ui-chips-input-remove:hover,
+.ui-chips-input-remove:focus-visible {
+  background: var(--border-strong);
+  outline: none;
+}
+.ui-chips-input-text {
+  flex: 1;
+  min-width: 8em;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}

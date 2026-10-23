@@ -1,0 +1,29 @@
+{
+  "name": "@patchix/ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "build": "node build.ts",
+    "dev": "node build.ts --watch",
+    "storybook": "storybook dev --port 6006 --no-open",
+    "build-storybook": "storybook build --output-dir storybook-static --quiet"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.8.0",
+    "@patchix/common": "workspace:*",
+    "marked": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@storybook/react-vite": "10.6.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "storybook": "10.6.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.2"
+  }
+}

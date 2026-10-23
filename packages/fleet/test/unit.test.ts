@@ -1,0 +1,491 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { publishable, RunSchema, type Campaign, type Pr, type Run, type Task } from "@patchix/common";
+import { parseIssueTasks } from "../src/issue.ts";
+import { passRegex } from "../src/checks.ts";
+import { capture, CaptureError, childEnv, commandLine } from "../src/proc.ts";
+import { forkUrl, git } from "../src/git.ts";
+import { forkOf } from "../src/github.ts";
+import { parseLint, withWords } from "../src/lint.ts";
+import { refreshPrs, renderDraft } from "../src/pr.ts";
+import { parseWords } from "../src/run.ts";
+import {
+  alive,
+  askDir,
+  checkFile,
+  clearQueue,
+  dequeue,
+  enqueue,
+  idTime,
+  jobs,
+  listAsks,
+  listQueue,
+  listRuns,
+  queueDir,
+  readCampaign,
+  readPr,
+  readSettings,
+  runDir,
+  runId,
+  taskState,
+  taskViews,
+  tomlWords,
+  writeDraft,
+  writePr,
+  writeRun,
+  writeSettings,
+  writeTasks,
+  type Ctx,
+} from "../src/store.ts";
+import { mergeTasks, parseSource } from "../src/sync.ts";
+import { cliLayout, kdlString, launch } from "../src/zellij.ts";
+
+const task: Task = { attr: "foo", paths: [], notes: "", checked: false, pr: null, remark: null, in_issue: true, in_source: false, branch: null };
+const run = (status: Run["status"], id = "20260101-000000", pid: number | null = null): Run => ({ id, attr: "foo", tags: [], started: "2026-01-01T00:00:00Z", finished: null, status, model: "m", pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null });
+const pr = (number: number | null, state: Pr["state"] = "open"): Pr => ({ title: "t", labels: [], run: "20260101-000000", words: [], number, url: null, created: null, pushed: null, updated: null, state, merged: null, confirmed: null });
+
+test("publishable", () => {
+  assert.deepEqual(
+    RunSchema.shape.status.options.map((s) => [s, publishable(run(s))]),
+    [["running", false], ["ok", true], ["unverified", true], ["wontfix", false], ["failed", false], ["stopped", false]],
+  );
+  assert.equal(publishable(undefined), false);
+});
+
+test("taskState", () => {
+  assert.equal(taskState(task, [], null), "todo");
+  assert.equal(taskState(task, [run("running"), run("ok")], null), "running");
+  assert.equal(taskState(task, [run("ok"), run("failed")], null), "ready");
+  assert.equal(taskState(task, [run("failed")], pr(null)), "failed");
+  assert.equal(taskState(task, [run("stopped")], null), "failed");
+  assert.equal(taskState(task, [run("wontfix"), run("failed")], null), "wontfix", "the agent found no small fix");
+  assert.equal(taskState(task, [run("ok"), run("wontfix")], null), "ready");
+  assert.equal(taskState(task, [run("unverified"), run("ok")], null), "unverified", "a check did not pass: a person decides");
+  assert.equal(taskState(task, [run("failed"), run("unverified")], null), "failed");
+  assert.equal(taskState(task, [run("unverified")], pr(7)), "pr");
+  assert.equal(taskState(task, [run("wontfix")], pr(7)), "pr");
+  assert.equal(taskState(task, [run("ok")], pr(7)), "pr");
+  assert.equal(taskState(task, [run("running")], pr(7)), "pr", "the pull request has priority");
+  assert.equal(taskState({ ...task, pr: 9 }, [run("ok")], null), "external");
+  assert.equal(taskState({ ...task, checked: true }, [], null), "external");
+  assert.equal(taskState({ ...task, pr: 9 }, [], pr(9)), "pr");
+  assert.equal(taskState({ ...task, checked: true }, [], pr(9)), "pr", "the tick box does not hide an open pull request");
+  assert.equal(taskState({ ...task, checked: true }, [], pr(9, "merged")), "merged");
+  assert.equal(taskState({ ...task, checked: true }, [run("ok")], pr(9, "closed")), "closed");
+  assert.equal(taskState({ ...task, checked: true }, [run("ok")], pr(null)), "ready", "patchix has a draft: the task is not done elsewhere");
+});
+
+test("git refuses the commands that can deepen the checkout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "patchix-git-"));
+  try {
+    execFileSync("git", ["init", "-q", dir]);
+    await assert.rejects(git(dir, ["fetch", "upstream", "master"]), /does not start git fetch/);
+    const refused = [["pull"], ["clone", "x"], ["submodule", "update"], ["merge-base", "a", "b"], ["worktree", "prune"], ["log", "--depth=1"], ["log", "--deepen=1"], ["rev-list", "--unshallow"], ["-C", dir, "fetch"]];
+    for (const args of refused) {
+      await assert.rejects(git(dir, args), /does not start git/, args.join(" "));
+    }
+    assert.equal((await git(dir, ["rev-parse", "--is-inside-work-tree"])).trim(), "true");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an error of capture has all the stdout and the stderr, and the log has the command and its output", async () => {
+  const long = "x".repeat(5000);
+  const log: string[] = [];
+  const script = `echo ${long}; sleep 0.1; echo 'the error' >&2; exit 3`;
+  await assert.rejects(capture("sh", ["-c", script], { log }), (e: unknown) => {
+    assert.ok(e instanceof CaptureError);
+    assert.deepEqual([e.code, e.stdout, e.stderr], [3, `${long}\n`, "the error\n"]);
+    assert.ok(e.message.includes(long) && e.message.includes("the error"), "the message has all the output");
+    return true;
+  });
+  assert.deepEqual(log, [`$ sh -c '${script.replaceAll("'", "'\\''")}'`, `${long}\nthe error`, "[exit code 3]"]);
+  assert.equal(await capture("sh", ["-c", "echo out; echo err >&2"], { log }), "out\n", "the result is only the stdout");
+  assert.equal(log.at(-1)?.split("\n").sort().join(" "), "err out");
+  assert.equal(commandLine("gh", ["api", "-f", "title=a b", "labels[]=x"]), "gh api -f 'title=a b' 'labels[]=x'");
+});
+
+test("forkUrl gives an SSH URL for GitHub and the test URL for a test", () => {
+  const campaign = { issue: { repo: "NixOS/nixpkgs", number: 1 } } as Campaign;
+  assert.equal(forkUrl({ root: "/r", data: "/r", github: "https://github.com" }, campaign, "someone"), "ssh://git@github.com/someone/nixpkgs");
+  assert.equal(forkUrl({ root: "/r", data: "/r", github: "file:///tmp/gh" }, campaign, "someone"), "file:///tmp/gh/someone/nixpkgs");
+});
+
+test("settings.yaml: the defaults without the file, the values of the file, and the write", async () => {
+  const data = await mkdtemp(join(tmpdir(), "patchix-settings-"));
+  const ctx: Ctx = { root: "/nonexistent", data, github: "file:///nonexistent" };
+  try {
+    assert.deepEqual(await readSettings(ctx), { fork: null, model: "claude-opus-5-5", concurrency: 2 }, "no file: the defaults");
+    await writeFile(join(data, "settings.yaml"), "model: claude-fable-5-1\nold: 1\n");
+    assert.deepEqual(await readSettings(ctx), { fork: null, model: "claude-fable-5-1", concurrency: 2 }, "a value that is not in the file gets its default");
+    await writeFile(join(data, "settings.yaml"), "");
+    assert.deepEqual(await readSettings(ctx), { fork: null, model: "claude-opus-5-5", concurrency: 2 }, "an empty file");
+    await writeSettings(ctx, { fork: "someone", model: "claude-opus-5-5", concurrency: 3 });
+    assert.equal(await readFile(join(data, "settings.yaml"), "utf8"), "fork: someone\nmodel: claude-opus-5-5\nconcurrency: 3\n");
+    assert.deepEqual(await readSettings(ctx), { fork: "someone", model: "claude-opus-5-5", concurrency: 3 });
+    await assert.rejects(writeSettings(ctx, { fork: "a/b", model: "m", concurrency: 1 }), /fork/, "a fork that is not a GitHub login");
+    await assert.rejects(writeSettings(ctx, { fork: null, model: "m", concurrency: 0 }), /concurrency/);
+    await writeFile(join(data, "settings.yaml"), "concurrency: many\n");
+    await assert.rejects(readSettings(ctx), /settings\.yaml: [\s\S]*concurrency/, "an incorrect file gives an error with its path");
+  } finally {
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("forkOf gives the fork of the settings, or the login of gh api user, and the process keeps the login", async () => {
+  const data = await mkdtemp(join(tmpdir(), "patchix-fork-"));
+  const ctx: Ctx = { root: "/nonexistent", data, github: "file:///nonexistent" };
+  const calls = join(data, "gh.txt");
+  const gh = join(data, "gh.sh");
+  const bad = join(data, "gh-bad.sh");
+  try {
+    await writeFile(gh, `#!/bin/sh\necho "$*" >> ${calls}\necho someone\n`);
+    await writeFile(bad, "#!/bin/sh\necho 'not logged in' >&2\nexit 1\n");
+    await chmod(gh, 0o755);
+    await chmod(bad, 0o755);
+    process.env["PATCHIX_GH_BIN"] = gh;
+    assert.equal(await forkOf(ctx), "someone", "no fork in the settings: the login of gh");
+    assert.equal(await forkOf(ctx), "someone");
+    assert.equal(await readFile(calls, "utf8"), "api user --jq .login\n", "one gh call: the process keeps the login");
+    await writeSettings(ctx, { fork: "other", model: "m", concurrency: 1 });
+    assert.equal(await forkOf(ctx), "other", "the fork of the settings comes first");
+    await writeSettings(ctx, { fork: null, model: "m", concurrency: 1 });
+    process.env["PATCHIX_GH_BIN"] = bad;
+    await assert.rejects(forkOf(ctx), /^Error: no fork: set the fork on the settings page, or log in to gh \(.*not logged in/);
+  } finally {
+    delete process.env["PATCHIX_GH_BIN"];
+    await rm(data, { recursive: true, force: true });
+  }
+});
+
+test("a campaign.yaml of an older version loads without fork, model and concurrency, with one warning", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-legacy-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  const warn = t.mock.method(console, "warn", () => undefined);
+  try {
+    await mkdir(join(root, "campaigns", "t"), { recursive: true });
+    const file = join(root, "campaigns", "t", "campaign.yaml");
+    await writeFile(file, "name: t\ntitle: Test\nissue: { repo: NixOS/nixpkgs, number: 1 }\nfork: someone\nbranch_prefix: t/\nmodel: m\nconcurrency: 2\n");
+    const campaign = await readCampaign(ctx, "t");
+    assert.deepEqual(["fork" in campaign, "model" in campaign, "concurrency" in campaign, campaign.branch_prefix], [false, false, false, "t/"]);
+    await readCampaign(ctx, "t");
+    assert.deepEqual(
+      warn.mock.calls.map((c) => c.arguments[0]),
+      [`warning: ${file}: patchix does not use the keys fork, model, concurrency. The settings page gives the fork, the model and the concurrency.`],
+      "one warning for the file",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("parseLint keeps the errors of the file", () => {
+  const output = [
+    "/tmp/x/text.md:3:23: error: 'vendored' is not in the STE dictionary; if it is a technical name, add it to memelint.toml [STE 1.6]",
+    "/tmp/x/text.md:5:1: error: sentence has 31 words; the STE limit for descriptive text is 25 [STE 6.3]",
+    "/tmp/x/other.md:1:1: error: not this file",
+    "1 files, 2 comments, 2 errors, 0 warnings (ASD-STE100 issue 9)",
+  ].join("\n");
+  assert.deepEqual(parseLint(output, "/tmp/x/text.md", "pr.md"), [
+    { file: "pr.md", line: 3, message: "'vendored' is not in the STE dictionary; if it is a technical name, add it to memelint.toml [STE 1.6]" },
+    { file: "pr.md", line: 5, message: "sentence has 31 words; the STE limit for descriptive text is 25 [STE 6.3]" },
+  ]);
+  assert.deepEqual(parseLint("", "/tmp/x/text.md", "pr.md"), []);
+});
+
+test("tomlWords and withWords", () => {
+  const toml = 'check = true\nwords = [\n  # a comment, with "quotes"\n  "a", "b c", \'d\'\n]\n';
+  assert.deepEqual(tomlWords(toml)?.words, ["a", "b c", "d"]);
+  assert.deepEqual(tomlWords(withWords(toml, ["e"]))?.words, ["a", "b c", "d", "e"]);
+  assert.deepEqual(tomlWords(withWords('words = ["a",]\n', ["e"]))?.words, ["a", "e"]);
+  assert.deepEqual(tomlWords(withWords("check = true\n", ["e"]))?.words, ["e"]);
+  assert.equal(withWords(toml, []), toml);
+});
+
+test("runId, parseWords and passRegex", () => {
+  assert.equal(runId(new Date("2026-10-23T21:05:09.123Z")), "20261023-210509");
+  assert.deepEqual(parseWords("JRE\n\n# comment\n JRE \nPEM\n"), ["JRE", "PEM"]);
+  const re = passRegex("^VERDICT {attr} emudhra: FIXED", { attr: "python3Packages.foo", base: "b", after: "a" });
+  assert.ok(re.test("x\nVERDICT python3Packages.foo emudhra: FIXED\n"));
+  assert.ok(!re.test("VERDICT python3PackagesXfoo emudhra: FIXED"));
+});
+
+test("the KDL layout of a tab", () => {
+  assert.equal(kdlString('a "b" \\c'), '"a \\"b\\" \\\\c"');
+  assert.throws(() => kdlString("a\nb"), /control sign/);
+  const path = kdlString(process.env["PATH"] ?? "");
+  assert.equal(
+    cliLayout({ root: "/home/r/patchix", data: "/home/r/data" }, ["run", "cacert", "python3Packages.foo"]),
+    `layout {\n  pane command=${kdlString(process.execPath)} {\n    args "packages/fleet/src/cli.ts" "--root" "/home/r/patchix" "--data" "/home/r/data" "--path" ${path} "run" "cacert" "python3Packages.foo"\n    cwd "/home/r/patchix"\n    close_on_exit false\n  }\n}\n`,
+  );
+  assert.match(cliLayout({ root: "/r", data: "/d" }, ["fleet", "cacert"], true), /"--path" .* "fleet" "cacert"\n    cwd "\/r"\n    close_on_exit true\n/);
+});
+
+test("launch gives tab: false when zellij does not show the tab, and does not open the tab again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-launch-"));
+  const calls = join(root, "zellij.txt");
+  const zellij = join(root, "zellij.sh");
+  // The test zellij records the subcommand, lists the session and shows only the tab `t/a`.
+  await writeFile(zellij, `#!/bin/sh\nprintf '%s\\n' "\${4:-$1}" >> ${calls}\n[ "$1" = list-sessions ] && echo 'patchix [Created 1s ago]'\n[ "$4" = query-tab-names ] && printf 'Tab #1\\nt/a\\n'\nexit 0\n`);
+  await chmod(zellij, 0o755);
+  process.env["PATCHIX_ZELLIJ_BIN"] = zellij;
+  try {
+    const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+    assert.deepEqual(await launch(ctx, "t/a", ["run", "t", "a"]), { tab: true });
+    assert.deepEqual(await launch(ctx, "t/b", ["run", "t", "b"]), { tab: false });
+    assert.deepEqual(
+      (await readFile(calls, "utf8")).trim().split("\n"),
+      ["list-sessions", "new-tab", "query-tab-names", "list-sessions", "new-tab", "query-tab-names", "query-tab-names", "query-tab-names"],
+      "one new-tab for each launch, and 3 queries when the tab is not there",
+    );
+  } finally {
+    delete process.env["PATCHIX_ZELLIJ_BIN"];
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+/** A process with the words of `marker` in its command line, as a runner or a fleet. */
+async function markerProcess(marker: string) {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)", ...marker.split(" ")], { stdio: "ignore" });
+  await once(child, "spawn");
+  return child;
+}
+
+test("alive: the process operates and its command line contains the marker", async () => {
+  const child = await markerProcess("patchix-test run t foo.bar");
+  try {
+    const pid = child.pid ?? 0;
+    assert.equal(alive(pid, "run t foo.bar"), true);
+    assert.equal(alive(pid, "run t foo"), false, "the marker has complete words");
+    assert.equal(alive(pid, "run t"), true);
+    assert.equal(alive(pid, "ask t foo.bar"), false);
+    assert.equal(alive(process.pid, "run t foo.bar"), false, "a live process without the marker");
+    assert.equal(alive(spawnSync("true").pid, "true"), false, "a process that stopped");
+    assert.equal(alive(0, "run"), false);
+  } finally {
+    child.kill();
+  }
+  await once(child, "exit");
+  assert.equal(alive(child.pid ?? 0, "run t foo.bar"), false);
+});
+
+test("the queue is a directory: one file for each entry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-queue-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  try {
+    assert.deepEqual(await listQueue(ctx, "t"), [], "no directory");
+    await enqueue(ctx, "t", "b", "2026-01-01T00:00:00.001Z");
+    await enqueue(ctx, "t", "c", "2026-01-01T00:00:00.000Z");
+    await enqueue(ctx, "t", "a", "2026-01-01T00:00:00.001Z");
+    assert.deepEqual(await listQueue(ctx, "t"), ["c", "a", "b"], "the oldest first, then the name");
+    await enqueue(ctx, "t", "c", "2026-01-02T00:00:00.000Z");
+    assert.deepEqual(await listQueue(ctx, "t"), ["c", "a", "b"], "a second enqueue does not change the entry");
+    assert.equal(await readFile(join(queueDir(ctx, "t"), "c"), "utf8"), "2026-01-01T00:00:00.000Z\n");
+    await writeFile(join(queueDir(ctx, "t"), ".x.1.tmp"), "2025-01-01T00:00:00.000Z\n");
+    assert.deepEqual(await listQueue(ctx, "t"), ["c", "a", "b"], "a temporary file is not an entry");
+    await assert.rejects(enqueue(ctx, "t", "../x"), /not an attribute/);
+    assert.equal(await dequeue(ctx, "t", "a"), true);
+    assert.equal(await dequeue(ctx, "t", "a"), false, "a second dequeue does nothing");
+    assert.deepEqual(await listQueue(ctx, "t"), ["c", "b"]);
+    await clearQueue(ctx, "t");
+    assert.deepEqual(await listQueue(ctx, "t"), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the task list is the union of the issue and the source", () => {
+  const warnings: string[] = [];
+  const source = parseSource("foo  bundles a copy\nnew.attr\n\n!bad line\nfoo again\n", warnings);
+  assert.deepEqual([...source], [["foo", "bundles a copy"], ["new.attr", ""]]);
+  assert.equal(warnings.length, 1);
+  const issue = parseIssueTasks("- [ ] **foo** — `/a`\n- [x] **bar** — `/b`\n");
+  assert.deepEqual(
+    mergeTasks(issue, source).map((t) => [t.attr, t.in_issue, t.in_source, t.notes, t.paths]),
+    [
+      ["foo", true, true, "", ["/a"]],
+      ["bar", true, false, "", ["/b"]],
+      ["new.attr", false, true, "", []],
+    ],
+  );
+  assert.deepEqual(mergeTasks(issue, null).map((t) => [t.in_issue, t.in_source]), [[true, false], [true, false]]);
+});
+
+test("a running record without a live runner is read as stopped, and the file does not change", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-store-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  const runner = await markerProcess("cli.ts --root /r run t bar");
+  try {
+    await writeRun(ctx, "t", run("running", "20260101-000001", spawnSync("true").pid ?? null));
+    await writeRun(ctx, "t", { ...run("running", "20260101-000002", runner.pid ?? null), attr: "bar" });
+    await writeRun(ctx, "t", { ...run("running", "20260101-000003", process.pid), attr: "baz" });
+    const [stopped] = await listRuns(ctx, "t", "foo");
+    assert.deepEqual([stopped?.status, stopped?.error], ["stopped", "the process stopped"]);
+    assert.match(await readFile(join(runDir(ctx, "t", "foo", "20260101-000001"), "run.yaml"), "utf8"), /status: running/, "the server does not write run.yaml");
+    assert.equal((await listRuns(ctx, "t", "baz"))[0]?.status, "stopped", "a live pid without the marker: an other process got the pid");
+    assert.deepEqual(await jobs(ctx, "t"), [{ attr: "bar", kind: "run", id: "20260101-000002", started: "2026-01-01T00:00:00Z" }]);
+  } finally {
+    runner.kill();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an ask directory with question.md and without ask.yaml is an ask that starts, and fails after 2 minutes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-ask-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  try {
+    const fresh = runId();
+    const old = runId(new Date(Date.now() - 3 * 60_000));
+    for (const id of [fresh, old, "20260101-000009"]) await mkdir(askDir(ctx, "t", "foo", id), { recursive: true });
+    await writeFile(join(askDir(ctx, "t", "foo", fresh), "question.md"), "Why?\n");
+    await writeFile(join(askDir(ctx, "t", "foo", old), "question.md"), "Old?\n");
+    const asks = await listAsks(ctx, "t", "foo");
+    assert.deepEqual(
+      asks.map((a) => [a.id, a.question, a.status, a.pid, a.error, a.started]),
+      [
+        [fresh, "Why?", "running", null, null, idTime(fresh)],
+        [old, "Old?", "failed", null, "the ask did not start", idTime(old)],
+      ],
+      "an empty ask directory is not an ask",
+    );
+    assert.deepEqual(await jobs(ctx, "t"), [{ attr: "foo", kind: "ask", id: fresh, started: idTime(fresh) }], "an ask that starts is a job");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the files of an older version load: the kind of a run, the review and the confirmation of a draft and the name of an ask", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-old-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  try {
+    const id = "20260101-000000";
+    const run = ["id: 20260101-000000", "attr: foo", "kind: import", "started: 2026-01-01T00:00:00Z", "finished: 2026-01-01T00:00:00Z", "status: ok"];
+    run.push("model: m", "pid: null", "base: a", "head: b", "commits: 1", "checks: []", "lint: null", "error: null");
+    await mkdir(runDir(ctx, "t", "foo", id), { recursive: true });
+    await writeFile(join(runDir(ctx, "t", "foo", id), "run.yaml"), `${run.join("\n")}\n`);
+    const [loaded] = await listRuns(ctx, "t", "foo");
+    assert.deepEqual([loaded?.tags, loaded?.status, "kind" in (loaded ?? {})], [[], "ok", false]);
+
+    const review = "review:\n  by: someone\n  at: 2026-01-01T00:00:00Z\n  examined: [diff]\n  note: I read the diff.\n";
+    await writeFile(join(root, "state", "t", "tasks", "foo", "pr.yaml"), `title: t\nlabels: []\nrun: ${id}\nwords: []\n${review}number: null\nurl: null\ncreated: null\npushed: null\nupdated: null\n`);
+    const pr = await readPr(ctx, "t", "foo");
+    assert.deepEqual([pr?.title, pr?.state, pr?.confirmed, "review" in (pr ?? {})], ["t", "open", null, false]);
+
+    const ask = ["id: 20260101-000000", "attr: foo", "by: someone", "question: Why?", "started: 2026-01-01T00:00:00Z", "finished: null", "status: ok"];
+    await mkdir(askDir(ctx, "t", "foo", id), { recursive: true });
+    await writeFile(join(askDir(ctx, "t", "foo", id), "ask.yaml"), `${[...ask, "model: m", "pid: null", "files: []", "error: null"].join("\n")}\n`);
+    const [asked] = await listAsks(ctx, "t", "foo");
+    assert.deepEqual([asked?.question, "by" in (asked ?? {})], ["Why?", false]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refreshPrs writes the state of the pull requests of the fork into the drafts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-refresh-"));
+  const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  const calls = join(root, "gh.txt");
+  const gh = join(root, "gh.sh");
+  const listed = [
+    { number: 12, state: "CLOSED", mergedAt: null, url: "u12", headRefName: "t/shared" },
+    { number: 11, state: "OPEN", mergedAt: null, url: "u11", headRefName: "t/shared" },
+    { number: 10, state: "OPEN", mergedAt: null, url: "u10", headRefName: "t/qux" },
+    { number: 8, state: "OPEN", mergedAt: null, url: "u8", headRefName: "t/bar" },
+    { number: 7, state: "MERGED", mergedAt: "2026-10-23T12:08:25Z", url: "u7", headRefName: "t/old-name" },
+  ];
+  try {
+    await mkdir(join(root, "campaigns", "t"), { recursive: true });
+    await writeFile(join(root, "campaigns", "t", "campaign.yaml"), "name: t\ntitle: Test\nissue: { repo: NixOS/nixpkgs, number: 1 }\nbranch_prefix: t/\n");
+    await writeFile(join(root, "settings.yaml"), "fork: someone\n");
+    await writeFile(join(root, "list.json"), JSON.stringify(listed));
+    await writeFile(gh, `#!/bin/sh\nprintf '%s ' "$@" >> ${calls}\necho >> ${calls}\ncat ${join(root, "list.json")}\n`);
+    await chmod(gh, 0o755);
+    process.env["PATCHIX_GH_BIN"] = gh;
+    const tasks = parseIssueTasks("- [x] **foo** — `/a`\n- [ ] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n- [ ] **sh.a** — `/e`\n");
+    await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: tasks.map((t) => (t.attr === "sh.a" ? { ...t, branch: "t/shared" } : t)) });
+    await writePr(ctx, "t", "foo", { ...pr(7), url: "old" });
+    await writePr(ctx, "t", "bar", pr(null));
+    await writePr(ctx, "t", "baz", pr(9));
+    await writePr(ctx, "t", "sh.a", pr(null));
+    await writeRun(ctx, "t", { ...run("ok"), attr: "qux" });
+    const campaign = await readCampaign(ctx, "t");
+
+    assert.deepEqual(await refreshPrs(ctx, campaign), ["bar", "foo", "sh.a"]);
+    assert.equal((await readFile(calls, "utf8")).trim(), "pr list --repo NixOS/nixpkgs --author someone --state all --limit 300 --json number,state,mergedAt,url,headRefName");
+    const fields = async (attr: string) => {
+      const p = await readPr(ctx, "t", attr);
+      return p === null ? null : [p.number, p.state, p.merged, p.url];
+    };
+    assert.deepEqual(await fields("foo"), [7, "merged", "2026-10-23T12:08:25Z", "u7"], "the number gives the pull request, also with a different branch");
+    assert.deepEqual(await fields("bar"), [8, "open", null, "u8"], "the draft gets the pull request of its branch");
+    assert.deepEqual(await fields("baz"), [9, "open", null, null], "a number that is not in the list does not change");
+    assert.deepEqual(await fields("sh.a"), [12, "closed", null, "u12"], "the newest pull request of the branch of the task");
+    assert.equal(await readPr(ctx, "t", "qux"), null, "a task without a draft gets no draft");
+    assert.deepEqual((await taskViews(ctx, "t")).map((v) => [v.attr, v.state]), [["foo", "merged"], ["bar", "pr"], ["baz", "pr"], ["qux", "ready"], ["sh.a", "closed"]]);
+    assert.deepEqual(await refreshPrs(ctx, campaign), [], "a second refresh changes nothing");
+    assert.deepEqual(await refreshPrs(ctx, campaign, []), [], "a given list: no gh");
+    assert.equal((await readFile(calls, "utf8")).trim().split("\n").length, 2);
+  } finally {
+    delete process.env["PATCHIX_GH_BIN"];
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renderDraft hides the local directories in the output of a check", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "patchix-hide-"));
+  const ctx: Ctx = { root: join(tmp, "root"), data: join(tmp, "data"), github: "file:///nonexistent" };
+  try {
+    await mkdir(join(ctx.root, "campaigns", "t"), { recursive: true });
+    await writeFile(join(ctx.root, "campaigns", "t", "campaign.yaml"), "name: t\ntitle: Test\nissue: { repo: NixOS/nixpkgs, number: 1 }\nbranch_prefix: t/\nchecks:\n  - { name: harness, command: x, pass: y }\n");
+    await writeRun(ctx, "t", run("ok"));
+    await writePr(ctx, "t", "foo", pr(null));
+    await writeDraft(ctx, "t", "foo", "{{check:harness}}\n");
+    const file = checkFile(runDir(ctx, "t", "foo", run("ok").id), "harness");
+    const output = `after: worktree ${join(ctx.data, ".cache", "worktrees", "t", "foo")}\nlog: ${ctx.data}/state/t/x.txt\ncode: ${ctx.root}/packages\n`;
+    await mkdir(join(file, ".."), { recursive: true });
+    await writeFile(file, output);
+
+    const rendered = (await renderDraft(ctx, "t", "foo")) ?? "";
+    assert.ok(rendered.includes("after: worktree <worktree>\nlog: <patchix>/state/t/x.txt\ncode: <patchix>/packages\n"), rendered);
+    assert.ok(!rendered.includes(tmp), "the description has no local path");
+    assert.equal(await readFile(file, "utf8"), output, "the stored output does not change");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("childEnv gives the GitHub token to nix in NIX_CONFIG", () => {
+  const line = "access-tokens = github.com=t0ken";
+  assert.equal(childEnv({ PATH: "/bin" })["NIX_CONFIG"], undefined, "without GH_TOKEN, NIX_CONFIG is not set");
+  assert.equal(childEnv({ GH_TOKEN: "" })["NIX_CONFIG"], undefined);
+  assert.equal(childEnv({ GH_TOKEN: "", NIX_CONFIG: "a = 1" })["NIX_CONFIG"], "a = 1");
+  assert.deepEqual(childEnv({ PATH: "/bin", GH_TOKEN: "t0ken" }), { PATH: "/bin", GH_TOKEN: "t0ken", NIX_CONFIG: line });
+  assert.equal(childEnv({ GH_TOKEN: "t0ken", NIX_CONFIG: "a = 1" })["NIX_CONFIG"], `a = 1\n${line}`, "the line goes after the lines that are there");
+  assert.equal(childEnv({ GH_TOKEN: "t0ken", NIX_CONFIG: "a = 1\nb = 2\n" })["NIX_CONFIG"], `a = 1\nb = 2\n${line}`);
+  const env = { GH_TOKEN: "t0ken", NIX_CONFIG: "a = 1" };
+  childEnv(env);
+  assert.equal(env.NIX_CONFIG, "a = 1", "the environment of patchix does not change");
+});
+
+test("childEnv removes a TMPDIR that is not a directory", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "patchix-tmpdir-"));
+  try {
+    const gone = join(dir, "gone");
+    const file = join(dir, "file");
+    await writeFile(file, "");
+    const env = { PATH: "/bin", TMPDIR: gone };
+    assert.deepEqual(childEnv(env), { PATH: "/bin" }, "a TMPDIR that does not exist is removed");
+    assert.equal(env.TMPDIR, gone, "the environment of patchix does not change");
+    assert.equal("TMPDIR" in childEnv({ TMPDIR: file }), false, "a TMPDIR that is a file is removed");
+    assert.equal(childEnv({ TMPDIR: dir })["TMPDIR"], dir, "a TMPDIR that is a directory stays");
+    assert.equal("TMPDIR" in childEnv({ PATH: "/bin" }), false, "a TMPDIR that is not set stays not set");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

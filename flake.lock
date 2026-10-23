@@ -1,0 +1,46 @@
+{
+  "nodes": {
+    "memelint": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792608400,
+        "narHash": "sha256-HP94s+phJfHp0Agb4m9W0jSxsYrZRhG1tZY/jds9xCo=",
+        "owner": "antimemes",
+        "repo": "memelint",
+        "rev": "bf5518cc9e43ae2afd3b6252d06daa2ac7176934",
+        "type": "github"
+      },
+      "original": {
+        "owner": "antimemes",
+        "repo": "memelint",
+        "rev": "bf5518cc9e43ae2afd3b6252d06daa2ac7176934",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1792502884,
+        "narHash": "sha256-ij8QUxzTOHovLrNOxVRx+RAhGQFOMsJbji0veiatH5k=",
+        "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+        "type": "tarball",
+        "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1097682.02c087f3fe67/nixexprs.tar.xz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
+      }
+    },
+    "root": {
+      "inputs": {
+        "memelint": "memelint",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

@@ -1,0 +1,51 @@
+.ui-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 35%);
+  transition: opacity 150ms;
+}
+.ui-dialog-backdrop[data-starting-style],
+.ui-dialog-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.ui-dialog {
+  position: fixed;
+  top: 30%;
+  left: 50%;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(26rem, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  translate: -50% -50%;
+  transition:
+    opacity 150ms,
+    scale 150ms;
+}
+.ui-dialog[data-starting-style],
+.ui-dialog[data-ending-style] {
+  opacity: 0;
+  scale: 0.96;
+}
+.ui-dialog-title {
+  margin: 0;
+  font-size: 15px;
+}
+.ui-dialog-description {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}

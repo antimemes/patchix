@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.direnv/
+.cache/
+.env
+# The local state of each campaign: tasks, runs, drafts. See AGENTS.md.
+/state/
+# The settings of the person and the machine, from the settings page. See AGENTS.md.
+/settings.yaml
+# The output link of `nix build`.
+/result

@@ -1,0 +1,17 @@
+{
+  "name": "patchix",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "pnpm -r --parallel typecheck",
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "start": "pnpm --filter @patchix/server start",
+    "test": "pnpm -r test",
+    "lint": "pnpm typecheck && memelint check"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  },
+  "packageManager": "pnpm@12.9.0"
+}

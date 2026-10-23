@@ -1,0 +1,260 @@
+/* The colors of the two themes. The light-dark() function of CSS selects one from the color-scheme. */
+:root {
+  color-scheme: light dark;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --text-sm: 12px;
+  --gutter: 16px;
+  --radius: 4px;
+
+  --bg: light-dark(#ffffff, #141518);
+  --surface: light-dark(#f6f7f9, #1b1c20);
+  --surface-2: light-dark(#eceef1, #25272c);
+  --border: light-dark(#d9dce1, #32353b);
+  --border-strong: light-dark(#b3b8c0, #4b4f57);
+  --fg: light-dark(#1a1c20, #e6e7ea);
+  --fg-muted: light-dark(#5e636b, #9a9fa7);
+  --accent: light-dark(#1f5fd1, #7ea8ff);
+  --accent-hover: light-dark(#184eb0, #a2c0ff);
+  --on-accent: light-dark(#ffffff, #0b1426);
+  --danger: light-dark(#c42b2b, #ff8a8a);
+  --on-danger: light-dark(#ffffff, #2b0b0b);
+  --shadow: 0 6px 24px light-dark(rgb(0 0 0 / 14%), rgb(0 0 0 / 55%));
+
+  --grey-bg: light-dark(#eceef1, #2a2d33);
+  --grey-fg: light-dark(#40454d, #c5c9d0);
+  --blue-bg: light-dark(#e2ecff, #1a2a49);
+  --blue-fg: light-dark(#1b4fb0, #9fbdff);
+  --red-bg: light-dark(#fde5e5, #461a1c);
+  --red-fg: light-dark(#ae2222, #ff9e9e);
+  --green-bg: light-dark(#e0f4e5, #163a22);
+  --green-fg: light-dark(#1c7835, #86d99c);
+  --purple-bg: light-dark(#efe6fd, #33204f);
+  --purple-fg: light-dark(#6930c3, #c8aaff);
+  --amber-bg: light-dark(#fcefd5, #3d2e10);
+  --amber-fg: light-dark(#875800, #f0c568);
+  --muted-bg: transparent;
+  --muted-fg: var(--fg-muted);
+  /* The colors of the states `merged` and `closed` of a pull request. */
+  --muted-green-bg: light-dark(#eef3ef, #1b241e);
+  --muted-green-fg: light-dark(#4b7356, #93b49b);
+  --muted-red-bg: light-dark(#f5eeee, #2a1d1e);
+  --muted-red-fg: light-dark(#8c5353, #c99b9b);
+  /* The color of the state `wontfix`. It is different from `amber`, the color of `unverified`. */
+  --muted-orange-bg: light-dark(#f8efe8, #2c2119);
+  --muted-orange-fg: light-dark(#9c5a2c, #d8a27c);
+
+  --add-bg: light-dark(#e3f5e8, #11301b);
+  --del-bg: light-dark(#fde8e8, #3b1416);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.4 var(--font);
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  line-height: 1.25;
+}
+h1 {
+  font-size: 18px;
+}
+h2 {
+  font-size: 15px;
+}
+h3 {
+  font-size: 13px;
+}
+p {
+  margin: 0;
+}
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 0.92em;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 6px var(--gutter);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.app-brand {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 1680px;
+  margin: 0 auto;
+  padding: 12px var(--gutter) 40px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stack-lg {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.spacer {
+  flex: 1;
+}
+.muted {
+  color: var(--fg-muted);
+}
+.small {
+  font-size: var(--text-sm);
+}
+.nowrap {
+  white-space: nowrap;
+}
+.break {
+  overflow-wrap: anywhere;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.table th,
+.table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.table th {
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.table tbody tr:hover td {
+  background: var(--surface);
+}
+.table tbody tr.is-selected td {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+.table td.wrap {
+  min-width: 14em;
+  white-space: normal;
+}
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.table .check {
+  width: 1px;
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.meta dt {
+  color: var(--fg-muted);
+}
+.meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.paths {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.paths li {
+  overflow-wrap: anywhere;
+}

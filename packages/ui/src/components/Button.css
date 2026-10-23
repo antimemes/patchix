@@ -1,0 +1,70 @@
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.ui-button:hover:not([data-disabled]) {
+  background: var(--surface-2);
+}
+.ui-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ui-button[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.ui-button--sm {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 12px;
+}
+.ui-button--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.ui-button--primary:hover:not([data-disabled]) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+.ui-button--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.ui-button--danger:hover:not([data-disabled]) {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.ui-button--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.ui-button.is-pending::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin 0.8s linear infinite;
+}
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

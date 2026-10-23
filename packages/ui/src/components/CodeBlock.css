@@ -1,0 +1,82 @@
+.ui-code {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.ui-code-viewport {
+  overscroll-behavior: contain;
+}
+.ui-code-viewport:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ui-code-content {
+  min-width: 100%;
+}
+.ui-pre {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 4;
+}
+.ui-pre.is-diff {
+  padding-inline: 0;
+}
+.ui-code-line {
+  display: block;
+  padding-inline: 10px;
+}
+.ui-code-line.is-add {
+  background: var(--add-bg);
+  color: var(--green-fg);
+}
+.ui-code-line.is-del {
+  background: var(--del-bg);
+  color: var(--red-fg);
+}
+.ui-code-line.is-hunk {
+  color: var(--blue-fg);
+}
+.ui-code-line.is-file {
+  color: var(--fg);
+  font-weight: 700;
+}
+.ui-code-status {
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.ui-scrollbar {
+  display: flex;
+  margin: 2px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.ui-scrollbar[data-orientation="vertical"] {
+  width: 6px;
+}
+.ui-scrollbar[data-orientation="horizontal"] {
+  height: 6px;
+}
+.ui-code:hover .ui-scrollbar,
+.ui-scrollbar[data-scrolling] {
+  opacity: 1;
+}
+.ui-scrollbar-thumb {
+  flex: 1;
+  border-radius: 4px;
+  background: var(--border-strong);
+}
+.ui-pre.is-wrap {
+  width: auto;
+  font-family: inherit;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

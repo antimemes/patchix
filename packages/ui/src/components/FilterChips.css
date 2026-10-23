@@ -1,0 +1,74 @@
+.ui-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ui-filter-chip {
+  --chip-bg: var(--grey-bg);
+  --chip-fg: var(--grey-fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-filter-chip:hover {
+  border-color: var(--border-strong);
+}
+.ui-filter-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ui-filter-chip[data-pressed] {
+  border-color: var(--chip-fg);
+  background: var(--chip-bg);
+  color: var(--chip-fg);
+}
+.ui-filter-chip-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.ui-filter-chip--blue {
+  --chip-bg: var(--blue-bg);
+  --chip-fg: var(--blue-fg);
+}
+.ui-filter-chip--red {
+  --chip-bg: var(--red-bg);
+  --chip-fg: var(--red-fg);
+}
+.ui-filter-chip--green {
+  --chip-bg: var(--green-bg);
+  --chip-fg: var(--green-fg);
+}
+.ui-filter-chip--purple {
+  --chip-bg: var(--purple-bg);
+  --chip-fg: var(--purple-fg);
+}
+.ui-filter-chip--amber {
+  --chip-bg: var(--amber-bg);
+  --chip-fg: var(--amber-fg);
+}
+.ui-filter-chip--muted-green {
+  --chip-bg: var(--muted-green-bg);
+  --chip-fg: var(--muted-green-fg);
+}
+.ui-filter-chip--muted-red {
+  --chip-bg: var(--muted-red-bg);
+  --chip-fg: var(--muted-red-fg);
+}
+.ui-filter-chip--muted-orange {
+  --chip-bg: var(--muted-orange-bg);
+  --chip-fg: var(--muted-orange-fg);
+}
+.ui-filter-chip--muted {
+  --chip-bg: var(--surface-2);
+  --chip-fg: var(--fg);
+}

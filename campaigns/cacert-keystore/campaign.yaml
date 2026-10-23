@@ -1,0 +1,20 @@
+# The campaign for NixOS/nixpkgs#576543: packages that ship their own Java CA keystore.
+name: cacert-keystore
+title: Vendored Java CA keystores
+issue:
+  repo: NixOS/nixpkgs
+  number: 576543
+base_branch: master
+branch_prefix: cacert/
+labels:
+  - "1.severity: security"
+timeout_minutes: 120
+checks:
+  # nix-cacert-harness examines the trust stores of the package before and after the fix, and tests the
+  # package with the certificate chains of the eMudhra incident. "after" is the worktree. A binary JDK is
+  # built one time; a JDK from source is skipped by the harness without --force-build.
+  - name: harness
+    command: nix run github:irgolic/nix-cacert-harness -- {attr} --base {base} --emudhra
+    pass: "^VERDICT {attr} emudhra: FIXED"
+    reviewer: nix run github:irgolic/nix-cacert-harness -- {attr} --pr {pr} --emudhra
+    timeout_minutes: 120
