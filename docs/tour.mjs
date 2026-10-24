@@ -1,9 +1,10 @@
-// This script records the tour of the patchix web page for the top of the README: `tour.mp4` and `tour.gif`.
+// This script records the tour of the patchix web page for the top of the README: `tour.mp4`.
 //
-// Use: `node docs/tour.mjs <base URL> [output directory]`. Without an output directory, the script writes the two
-// files into the directory of the script. For example:
+// Use: `node docs/tour.mjs <base URL> [output directory] [--light]`. Without an output directory, the script writes the
+// file into the directory of the script. The page shows its `dark` colors; `--light` gives the `light` colors.
+// For example:
 //   `nix-shell -p nodejs chromium ffmpeg --run 'node docs/tour.mjs http://127.0.0.1:8788/'`
-// The variables `CHROMIUM` and `FFMPEG` give different commands. `GIF_FPS` gives the `fps` of the GIF (10).
+// The variables `CHROMIUM` and `FFMPEG` give different commands.
 //
 // RULE: the server shows live data. The tour must not change the data.
 // Do not click a button that starts an operation: `Queue`, `Queue selected`, `Queue again`, `Clear queue`,
@@ -23,17 +24,18 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const [baseArg, outArg] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const light = args.includes("--light");
+const [baseArg, outArg] = args.filter((a) => a !== "--light");
 if (baseArg === undefined) {
-  console.error("Usage: node docs/tour.mjs <base URL> [output directory]");
+  console.error("Usage: node docs/tour.mjs <base URL> [output directory] [--light]");
   process.exit(2);
 }
 const base = baseArg.replace(/\/+$/, "");
 const outDir = resolve(outArg ?? dirname(fileURLToPath(import.meta.url)));
 const WIDTH = 1280;
 const HEIGHT = 800;
-const FPS = 20;
-const GIF_FPS = Number(process.env.GIF_FPS ?? 10);
+const FPS = 30;
 
 // The text of each control that the tour must not click.
 const FORBIDDEN = /^(Queue|Queue selected.*|Queue again|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Ask.*|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Create pull request|Update pull request|Replace|×)$/;
@@ -99,7 +101,7 @@ try {
 
   await send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await send("Emulation.setDeviceMetricsOverride", { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
-  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }, { name: "prefers-reduced-motion", value: "no-preference" }] });
+  await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: light ? "light" : "dark" }, { name: "prefers-reduced-motion", value: "no-preference" }] });
   await send("Page.enable");
   await send("Page.addScriptToEvaluateOnNewDocument", { source: `(${pageHelpers.toString()})()` });
 
@@ -325,10 +327,8 @@ try {
     const r = spawnSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", ...args], { stdio: "inherit" });
     if (r.status !== 0) throw new Error(`ffmpeg stopped with exit code ${r.status}`);
   };
-  const input = ["-framerate", String(FPS), "-i", join(frames, "f%05d.png")];
-  run([...input, "-c:v", "libx264", "-preset", "slow", "-crf", "24", "-tune", "animation", "-pix_fmt", "yuv420p", "-movflags", "+faststart", join(outDir, "tour.mp4")]);
-  run([...input, "-vf", `fps=${GIF_FPS},scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff:max_colors=128[p];[b][p]paletteuse=dither=none:diff_mode=rectangle`, "-loop", "0", join(outDir, "tour.gif")]);
-  console.log(`wrote ${join(outDir, "tour.mp4")} and ${join(outDir, "tour.gif")}`);
+  run(["-framerate", String(FPS), "-i", join(frames, "f%05d.png"), "-c:v", "libx264", "-preset", "slow", "-crf", "24", "-tune", "animation", "-pix_fmt", "yuv420p", "-movflags", "+faststart", join(outDir, "tour.mp4")]);
+  console.log(`wrote ${join(outDir, "tour.mp4")}`);
 } finally {
   ws?.close();
   if (chromium.exitCode === null) {
