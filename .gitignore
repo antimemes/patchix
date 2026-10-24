@@ -9,3 +9,6 @@ dist/
 /settings.yaml
 # The output link of `nix build`.
 /result
+# The tour recording: made by docs/tour.mjs, uploaded by hand into the README on github.com.
+/docs/tour.mp4
+/docs/tour.gif
