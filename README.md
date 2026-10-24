@@ -1,6 +1,6 @@
 # patchix
 
-![A tour of the web page: the campaigns, the task list, one task with its diff and checks, and the pull request page](docs/tour.gif)
+https://github.com/user-attachments/assets/920b302a-b4f2-424e-b473-40615c87e0a9
 
 patchix runs fleets of agents to patch packages in [nixpkgs](https://github.com/NixOS/nixpkgs). It helps deploy vulnerability fixes at large scale, and works best for deploying a small fix among many packages.
 
