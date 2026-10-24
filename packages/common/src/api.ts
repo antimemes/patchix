@@ -43,8 +43,8 @@
  *   writes its description again, sets the labels and gives `TaskDetail`. A different body or no body gives 409 with
  *   the error `CONFIRM_ERROR`. When the request has no error, `pr.yaml` gets the time of the request in `confirmed`. The draft must have
  *   no lint findings, the newest run must be `ok` and the task must have no job: if not, it gives 409. It also gives 409 for a pull request that is `merged` or
- *   `closed`, and for a commit of the branch with a problem (see `TaskDetail.commit_problems`). When the pull request is made, the worktree is removed. After these conditions, each command (`git push`,
- *   `git worktree remove`, `gh api` for the pull request and for the labels) and its `stdout` and `stderr` go into
+ *   `closed`, and for a commit of the branch with a problem (see `TaskDetail.commit_problems`). After these conditions, each command (`git push`,
+ *   `gh api` for the pull request and for the labels) and its `stdout` and `stderr` go into
  *   `publish.log` of the task. Each request writes the file again. The `TaskDetail` has the file in `publish_log`.
  *   Each error of this route is a `PublishError`: its `publish_log` is the log of this request, or `null` when no
  *   command started.

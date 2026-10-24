@@ -8,14 +8,13 @@ import { join } from "node:path";
 import { CONFIRM_ERROR, publishable, type Campaign, type DraftInput, type LintResult, type Pr, type PublishInput } from "@patchix/common";
 import { render } from "./render.ts";
 import { addLabels, forkOf, prCreate, prEdit, prList, type ListedPr } from "./github.ts";
-import { branchOf, commitProblems, problemText, push, removeWorktree, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
+import { branchOf, commitProblems, problemText, push, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
 import { lintText } from "./lint.ts";
 import { CaptureError, type Log } from "./proc.ts";
 import { parseWords } from "./run.ts";
 import {
   appendPublishLog,
   checkFile,
-  exists,
   fail,
   listRuns,
   message,
@@ -121,11 +120,10 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
 
 /**
  * Pushes the branch to the fork and makes the pull request, or writes its title and description again. Then it
- * adds the labels. A new pull request gets its description two times: the second time has its number. After the
- * push, the worktree is removed when it has no change that is not committed. These conditions give an error: no
- * draft, memelint findings and a newest run that is not `ok` or `unverified`. A job of the task and a pull request
- * that is `merged` or `closed` also give an error. A commit of the branch with a problem also gives an error: see
- * `commitProblems`.
+ * adds the labels. A new pull request gets its description two times: the second time has its number. The worktree
+ * stays: only `DELETE …/worktree` removes it. These conditions give an error: no draft, memelint findings and a
+ * newest run that is not `ok` or `unverified`. A job of the task and a pull request that is `merged` or `closed`
+ * also give an error. A commit of the branch with a problem also gives an error: see `commitProblems`.
  *
  * After the conditions, each command and its output go into `publish.log` of the task, also after an error. The file
  * has only the commands of the newest request. It gets each line at the time of the line: thus the page can show the
@@ -211,8 +209,6 @@ async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, bo
   await push(ctx, branch, draft.pushed, log);
   let pr: Pr = { ...draft, pushed: await revParse(repoPath(ctx), `refs/heads/${branch}`) };
   await writePr(ctx, c, attr, pr);
-  const worktree = worktreePath(ctx, campaign, attr);
-  if (await exists(worktree)) await removeWorktree(ctx, worktree, log).catch((e: unknown) => console.warn(`the worktree ${worktree} stays: ${message(e)}`));
 
   const repo = campaign.issue.repo;
   const dir = await mkdtemp(join(tmpdir(), "patchix-pr-"));

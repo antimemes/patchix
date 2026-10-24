@@ -289,7 +289,7 @@ export function trailerProblems(attr: string): CommitProblems[] {
 const FORK_URL = "ssh://git@github.com/someone/nixpkgs";
 const PULL_FIELDS = "--jq '{number, html_url, state}'";
 
-/** The first part of `publish.log`: the push of the branch and the removal of the worktree. */
+/** The first part of `publish.log`: the push of the branch. */
 function pushLog(attr: string, minutesAgo: number): string[] {
   const branch = `cacert/${attr}`;
   return [
@@ -301,7 +301,6 @@ function pushLog(attr: string, minutesAgo: number): string[] {
     "remote: ",
     `To ${FORK_URL}`,
     ` * [new branch]          ${branch} -> ${branch}`,
-    `$ git worktree remove ${worktreePath(attr)}`,
   ];
 }
 

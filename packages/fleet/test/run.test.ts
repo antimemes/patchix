@@ -288,7 +288,6 @@ esac
     const commands = log.split("\n").filter((l) => l.startsWith("$ ")).map((l) => l.replace(gh, "gh").replace(/body=@\S+/, "body=@<file>"));
     assert.deepEqual(commands, [
       `$ git push --force-with-lease=t/foo:${head} fork t/foo`,
-      `$ git worktree remove ${worktreePath(ctx, campaign, "foo")}`,
       "$ gh api -X POST repos/NixOS/nixpkgs/pulls -f base=master -f head=someone:t/foo -f 'title=foo: use cacert bundle instead of bundled CA file' -F body=@<file> --jq '{number, html_url, state}'",
       "$ gh api -X POST repos/NixOS/nixpkgs/issues/42/labels -f 'labels[]=1.severity: security' --jq '.[].name'",
       "$ gh api -X PATCH repos/NixOS/nixpkgs/pulls/42 -f 'title=foo: use cacert bundle instead of bundled CA file' -F body=@<file> --jq '{number, html_url, state}'",
@@ -297,9 +296,9 @@ esac
     assert.ok(log.includes(`\n${pull}\na warning of gh\n`), "the stdout and the stderr of gh");
     assert.ok(log.endsWith("\n# the pull request is #42: https://github.com/NixOS/nixpkgs/pull/42\n"), log);
     const early = await readFile(seen, "utf8");
-    assert.ok(log.startsWith(early) && early.includes("\n$ git worktree remove "), `publish.log gets each command while the request operates: ${early}`);
+    assert.ok(log.startsWith(early) && early.includes(" t/foo -> t/foo (forced update)\n"), `publish.log gets each command while the request operates: ${early}`);
     assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), pr.pushed);
-    assert.equal(await exists(worktreePath(ctx, campaign, "foo")), false, "the worktree is removed");
+    assert.equal(await exists(worktreePath(ctx, campaign, "foo")), true, "the worktree stays after the publish");
   } finally {
     delete process.env["PATCHIX_GH_BIN"];
   }

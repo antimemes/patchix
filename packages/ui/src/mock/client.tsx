@@ -291,7 +291,6 @@ export function mockClient(options: MockOptions): Client {
       const now = new Date().toISOString();
       t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: run?.head ?? null, confirmed: now };
       t.state = "pr";
-      t.worktree = null;
       changed(s, attr);
       return structuredClone(detail(s, attr));
     },

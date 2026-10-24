@@ -179,8 +179,8 @@ export async function baseWorktree(ctx: Ctx, campaign: Campaign): Promise<string
 }
 
 /** Removes the worktree. The branch stays. When the worktree has changes that are not committed, `git` gives an error. */
-export async function removeWorktree(ctx: Ctx, path: string, log?: Log): Promise<void> {
-  await git(repoPath(ctx), ["worktree", "remove", path], { log });
+export async function removeWorktree(ctx: Ctx, path: string): Promise<void> {
+  await git(repoPath(ctx), ["worktree", "remove", path]);
 }
 
 /** The diff of two trees, or of one tree and the files of the worktree. It does not use the parents of the commits. */
