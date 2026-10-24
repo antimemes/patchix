@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { Campaign } from "@patchix/common";
-import { CampaignPage } from "./CampaignPage.tsx";
+import { CampaignPage, filtersKey } from "./CampaignPage.tsx";
 import { withMock } from "../mock/client.tsx";
 import { replaceParams } from "../router.ts";
 import { CAMPAIGN, at, job, mixedTasks, runningRun, task, worktreePath } from "../mock/fixtures.ts";
@@ -11,8 +11,11 @@ const meta = {
   title: "Storylines/Campaign page",
   component: CampaignPage,
   args: { campaign: "cacert" },
-  // The page reads the selected states and the attribute text from the URL query when it starts. Each story starts with an empty query.
-  beforeEach: () => replaceParams({ state: "", q: "" }),
+  // The page reads the selected states and the attribute text from the URL query, or from `sessionStorage`, when it starts. Each story starts with an empty query, and `sessionStorage` has no query.
+  beforeEach: () => {
+    replaceParams({ state: "", q: "" });
+    window.sessionStorage.removeItem(filtersKey("cacert"));
+  },
 } satisfies Meta<typeof CampaignPage>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -124,7 +127,7 @@ export const NoSource: Story = {
 };
 
 export const FilterInUrl: Story = {
-  parameters: { docs: { description: { story: "9. The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=python`. Back from a task page shows the same tasks." } } },
+  parameters: { docs: { description: { story: "9. The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=python`. Back from a task page shows the same tasks. `sessionStorage` also keeps the query: the link to the campaign on a task page shows the same tasks." } } },
   beforeEach: () => replaceParams({ state: "ready,merged", q: "python" }),
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks() }] }))],
   play: async ({ canvas }) => {

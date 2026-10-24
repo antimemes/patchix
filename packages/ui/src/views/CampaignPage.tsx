@@ -18,9 +18,40 @@ import { JobsStrip, NO_JOBS } from "./JobsStrip.tsx";
 import { PrCell, RunBadges } from "./shared.tsx";
 import "./views.css";
 
-/** The states of the `state` parameter of the URL. A value that is not a state is ignored. */
-function readStates(): TaskState[] {
-  return STATES.filter((s) => param("state").split(",").includes(s));
+/** The key of `sessionStorage` that keeps the URL query of `campaign`: `state=ready,merged&q=text`. */
+export const filtersKey = (campaign: string) => `patchix.filters.${campaign}`;
+
+/**
+ * The URL query. When the URL has no `state` and no `q`, the query that `sessionStorage` keeps for `campaign`.
+ * Thus a link without a query, for example the link to the campaign on a task page, shows the same tasks.
+ */
+function readFilters(campaign: string): URLSearchParams {
+  if (param("state") !== "" || param("q") !== "") return new URLSearchParams(window.location.search);
+  try {
+    return new URLSearchParams(window.sessionStorage.getItem(filtersKey(campaign)) ?? "");
+  } catch {
+    // An access to `sessionStorage` can cause an error. Then the page shows all tasks.
+    return new URLSearchParams();
+  }
+}
+
+/**
+ * Keep the URL query in `sessionStorage`. An empty query removes the value.
+ * Thus, when the person removes each selected state and the text, a link without a query also shows all tasks.
+ */
+function keepFilters(campaign: string, query: string): void {
+  try {
+    if (query === "") window.sessionStorage.removeItem(filtersKey(campaign));
+    else window.sessionStorage.setItem(filtersKey(campaign), query);
+  } catch {
+    // Without `sessionStorage`, only the URL keeps the query.
+  }
+}
+
+/** The states of the `state` parameter. A value that is not a state is ignored. */
+function readStates(params: URLSearchParams): TaskState[] {
+  const values = (params.get("state") ?? "").split(",");
+  return STATES.filter((s) => values.includes(s));
 }
 
 export function CampaignPage({ campaign: name }: { campaign: string }) {
@@ -45,9 +76,14 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
   });
 
   // The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=text`. Thus Back from a task page shows the same tasks, and a person can send the link.
-  const [states, setStates] = useState<TaskState[]>(readStates);
-  const [query, setQuery] = useState(() => param("q"));
-  useEffect(() => replaceParams({ state: states.join(","), q: query }), [states, query]);
+  // `sessionStorage` also keeps the query of each campaign, for a link without a query.
+  const [initial] = useState(() => readFilters(name));
+  const [states, setStates] = useState<TaskState[]>(() => readStates(initial));
+  const [query, setQuery] = useState(() => initial.get("q") ?? "");
+  useEffect(() => {
+    replaceParams({ state: states.join(","), q: query });
+    keepFilters(name, window.location.search.slice(1));
+  }, [name, states, query]);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
   const sync = useAction(async () => {
