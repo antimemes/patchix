@@ -1,5 +1,5 @@
 /** Data for the stories. Each time is some minutes before the start of the story. */
-import type { Ask, Campaign, CheckResult, Commit, JobStatus, Label, LintResult, Pr, Run, SettingsView, TaskState, TaskView } from "@patchix/common";
+import type { Ask, Campaign, CheckResult, Commit, CommitProblems, JobStatus, Label, LintResult, Pr, Run, SettingsView, TaskState, TaskView } from "@patchix/common";
 
 export function at(minutesAgo: number): string {
   return new Date(Date.now() - minutesAgo * 60_000).toISOString();
@@ -278,7 +278,12 @@ export function logLines(attr: string): string[] {
 /** The commits of a run with a head, as `git log <base>..<head>` and `git show` give them. */
 export function commits(attr: string): Commit[] {
   const subject = `${attr}: use the CA bundle of cacert`;
-  return [{ sha: HEAD, subject, message: `${subject}\n\nAssisted-by: Claude Code (Claude Opus 5.5)`, patch: diff(attr) }];
+  return [{ sha: HEAD, subject, message: `${subject}\n\nAssisted-by: Claude Code (Claude Opus 5.5) with patchix`, patch: diff(attr) }];
+}
+
+/** The head of the run with the `Co-Authored-By` line of Claude Code and without the `Assisted-by` line. See `TaskDetail.commit_problems`. */
+export function trailerProblems(attr: string): CommitProblems[] {
+  return [{ sha: HEAD, subject: `${attr}: use the CA bundle of cacert`, problems: ["no `Assisted-by: <tool> (<model>) with patchix` line", `a \`Co-authored-by\` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>`] }];
 }
 
 const FORK_URL = "ssh://git@github.com/someone/nixpkgs";

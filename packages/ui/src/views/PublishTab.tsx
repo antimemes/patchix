@@ -61,11 +61,18 @@ export interface PrState {
   prState: Pr["state"] | null;
   /** The tick box above the button. See `Pr.confirmed`. */
   confirmed: boolean;
+  /** The commits of the branch with a problem. See `TaskDetail.commit_problems`. */
+  commitProblems: TaskDetail["commit_problems"];
 }
+
+/** The text after the commit problems: the instruction for the person. */
+const AMEND_HINT = "Amend the commit in the worktree, then reload.";
 
 /** Each condition that stops the pull request button, as a text for the person. The server examines the same conditions. */
 export function prBlockers(s: PrState): string[] {
   const reasons: string[] = [];
+  for (const p of s.commitProblems) reasons.push(`Commit ${short(p.sha)} (${p.subject}): ${p.problems.join(", ")}.`);
+  if (s.commitProblems.length > 0) reasons.push(AMEND_HINT);
   if (!s.hasDraft) reasons.push("Make a draft first.");
   if (s.draftDirty) reasons.push("Save the changes of the draft.");
   if (s.findings !== null && s.findings > 0) reasons.push(`Correct the ${plural(s.findings, "lint finding")}.`);
@@ -155,7 +162,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
-  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, findings: findings?.length ?? null, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed });
+  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, findings: findings?.length ?? null, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems });
 
   if (draft === null) {
     return (

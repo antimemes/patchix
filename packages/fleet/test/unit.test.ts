@@ -5,11 +5,11 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { publishable, RunSchema, type Campaign, type Pr, type Run, type Task } from "@patchix/common";
+import { publishable, RunSchema, type Campaign, type CommitProblems, type Pr, type Run, type Task } from "@patchix/common";
 import { parseIssueTasks } from "../src/issue.ts";
 import { passRegex } from "../src/checks.ts";
 import { capture, CaptureError, childEnv, commandLine } from "../src/proc.ts";
-import { forkUrl, git } from "../src/git.ts";
+import { aiCoauthor, commitProblems, forkUrl, git, NO_ASSISTED, problemText, repoPath } from "../src/git.ts";
 import { forkOf } from "../src/github.ts";
 import { parseLint, withWords } from "../src/lint.ts";
 import { refreshPrs, renderDraft } from "../src/pr.ts";
@@ -92,6 +92,51 @@ test("git refuses the commands that can deepen the checkout", async () => {
     assert.equal((await git(dir, ["rev-parse", "--is-inside-work-tree"])).trim(), "true");
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("commitProblems examines the Assisted-by line, and the Co-authored-by lines that name an AI", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "patchix-trailers-"));
+  try {
+    const ctx: Ctx = { root: tmp, data: join(tmp, "data"), github: "file:///nonexistent" };
+    const campaign = { name: "t", branch_prefix: "t/" } as Campaign;
+    const work = join(tmp, "work");
+    const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
+    execFileSync("git", ["init", "-q", "-b", "t/foo", work]);
+    g("commit", "-q", "--allow-empty", "-m", "base");
+    const base = g("rev-parse", "HEAD");
+    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, null), [], "no repository");
+    const good = "Assisted-by: Claude Code (Claude Opus 5.5) with patchix";
+    // For each commit: the first line of the message, the other lines and the problems.
+    const messages: [string, string[], string[]][] = [
+      ["good", ["The body.", good], []],
+      ["missing", ["The body."], [NO_ASSISTED]],
+      ["without patchix", ["Assisted-by: Claude Code (Claude Opus 5.5)"], [NO_ASSISTED]],
+      ["without model", ["Assisted-by: Claude Code with patchix"], [NO_ASSISTED]],
+      ["lower case assisted", ["assisted-by: Claude Code (Claude Opus 5.5) with patchix"], [NO_ASSISTED]],
+      ["indented", [` ${good}`], [NO_ASSISTED]],
+      ["person", [good, "Co-authored-by: A Person <a@example.com>"], []],
+      ["person, lower case", [good, "co-authored-by: B <b@example.com>"], []],
+      ["claude", [good, "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"], [aiCoauthor("Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")]],
+      ["both", ["Co-Authored-By: Claude <noreply@anthropic.com>"], [NO_ASSISTED, aiCoauthor("Co-Authored-By: Claude <noreply@anthropic.com>")]],
+      ["upper case", [good, "CO-AUTHORED-BY: GitHub Copilot <copilot@github.com>"], [aiCoauthor("CO-AUTHORED-BY: GitHub Copilot <copilot@github.com>")]],
+      ["lower case", [good, "co-authored-by: A <a@example.com>", "co-authored-by: GPT-5 <bot@openai.com>"], [aiCoauthor("co-authored-by: GPT-5 <bot@openai.com>")]],
+    ];
+    const expected: CommitProblems[] = [];
+    for (const [subject, lines, problems] of messages) {
+      g("commit", "-q", "--allow-empty", "-m", subject, ...lines.flatMap((l) => ["-m", l]));
+      if (problems.length > 0) expected.unshift({ sha: g("rev-parse", "HEAD"), subject, problems });
+    }
+    execFileSync("git", ["clone", "-q", "--bare", work, repoPath(ctx)]);
+    const tip = g("rev-parse", "HEAD");
+    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, tip), expected, "only the commits with a problem, the newest first");
+    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, null), expected, "the tip of the branch of the task");
+    assert.deepEqual(await commitProblems(ctx, campaign, "bar", base, null), [], "no branch");
+    assert.deepEqual(await commitProblems(ctx, campaign, "foo", tip, tip), [], "no commit");
+    const both = expected.find((p) => p.subject === "both");
+    assert.equal(both && problemText(both), `commit ${both?.sha.slice(0, 12)}: ${NO_ASSISTED}, ${aiCoauthor("Co-Authored-By: Claude <noreply@anthropic.com>")}`);
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
   }
 });
 

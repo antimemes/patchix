@@ -1,13 +1,13 @@
 /**
  * The routes on a temporary root. No route of this test pushes, uses GitHub or makes a worktree: the root has no git
- * repository, thus `git push` cannot start. A test script operates as `zellij`: it records its arguments, gives
+ * repository, thus `git push` cannot start. Only the last test makes a repository, without the remote `fork`. A test script operates as `zellij`: it records its arguments, gives
  * the names of the tabs and does not start a process. For the tab of a fleet, it writes `fleet.yaml` with
  * `PATCHIX_TEST_FLEET_PID`. Other test scripts operate as `gh` for the `labels` and the `refresh` routes. A runner
  * or a fleet of a test is a process with the words `run t <attr>`, `ask t <attr>` or `fleet t` in its command line:
  * see `alive`.
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -332,5 +332,39 @@ test("the refresh writes the state of the pull request of the branch into the dr
     assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the pull request #5 is merged", publish_log: null } });
   } finally {
     delete process.env["PATCHIX_GH_BIN"];
+  }
+});
+
+test("a commit of the branch without the Assisted-by line is in commit_problems, and the pull request route refuses it", async () => {
+  const work = join(tmp, "work");
+  const repo = join(ctx.data, ".cache", "nixpkgs.git");
+  const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "-q", "-b", "master", work]);
+  g("commit", "-q", "--allow-empty", "-m", "base");
+  const base = g("rev-parse", "HEAD");
+  g("checkout", "-q", "-b", "t/qux");
+  g("commit", "-q", "--allow-empty", "-m", "qux: fix", "-m", "Co-Authored-By: Claude <noreply@anthropic.com>");
+  const bad = g("rev-parse", "HEAD");
+  execFileSync("git", ["clone", "-q", "--bare", work, repo]);
+  try {
+    const id = "20260101-000020";
+    await writeRun(ctx, "t", { ...run("qux", id, "ok", null), base, head: bad, finished: "f" });
+    await writeDraft(ctx, "t", "qux", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
+    await writePr(ctx, "t", "qux", { title: "qux: fix", labels: [], run: id, words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
+    const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
+    const detail = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body);
+    assert.deepEqual([detail.task.head, detail.commit_problems], [bad, [{ sha: bad, subject: "qux: fix", problems }]]);
+    const error = `the branch does not agree with the automation/AI policy of nixpkgs: commit ${bad.slice(0, 12)}: ${problems.join(", ")}`;
+    assert.deepEqual(await json("/api/campaigns/t/tasks/qux/pr", confirm), { status: 409, body: { error, publish_log: null } });
+    assert.equal((await json("/api/campaigns/t/tasks/qux/publish-log")).status, 404, "no command started");
+
+    // A person changes the commit. Then the conditions agree, and the request starts the commands.
+    g("commit", "-q", "--amend", "--allow-empty", "-m", "qux: fix", "-m", "Assisted-by: Claude Code (Claude Opus 5.5) with patchix");
+    execFileSync("git", ["push", "-q", "-f", repo, "t/qux"], { cwd: work });
+    assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body).commit_problems, []);
+    const started = await json("/api/campaigns/t/tasks/qux/pr", confirm);
+    assert.match(PublishErrorSchema.parse(started.body).publish_log ?? "", /^# publish of t\/qux, /);
+  } finally {
+    await rm(join(ctx.data, ".cache"), { recursive: true, force: true });
   }
 });

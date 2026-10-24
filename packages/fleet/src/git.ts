@@ -12,7 +12,7 @@
  */
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Campaign, Commit, Task } from "@patchix/common";
+import type { Campaign, Commit, CommitProblems, Task } from "@patchix/common";
 import { forkOf } from "./github.ts";
 import { capture, type CaptureOptions, type Log } from "./proc.ts";
 import { exists, fail, readRun, readTasks, type Ctx } from "./store.ts";
@@ -239,6 +239,40 @@ export async function runCommits(ctx: Ctx, c: string, attr: string, id: string):
   }
   return commitList(repo, run.base, run.head);
 }
+
+/** The line of the `automation/AI policy` of nixpkgs: `Assisted-by: <tool> (<model>) with patchix`. */
+const ASSISTED = /^Assisted-by: .+ \(.+\) with patchix$/m;
+const COAUTHORED = /^Co-authored-by:/i;
+/** The names of an AI in the value of a `Co-authored-by` line. A line that names a person has no problem. */
+const AI = /claude|anthropic|copilot|gpt|openai|gemini|noreply@anthropic\.com/i;
+export const NO_ASSISTED = "no `Assisted-by: <tool> (<model>) with patchix` line";
+export const aiCoauthor = (line: string) => `a \`Co-authored-by\` line names an AI: ${line}`;
+
+/**
+ * Examines the message of each commit from `base` to `tip` in the repository of patchix, the newest first. Each
+ * commit must have an `Assisted-by: <tool> (<model>) with patchix` line. A line that agrees with
+ * `/^Co-authored-by:/i` must not name an AI (see `AI`). Gives only the commits with a problem. When `tip` is `null`, the tip is the branch of the
+ * task (see `taskBranch`). Without the repository or the branch, the list is empty.
+ */
+export async function commitProblems(ctx: Ctx, campaign: Campaign, attr: string, base: string, tip: string | null): Promise<CommitProblems[]> {
+  const repo = repoPath(ctx);
+  if (!(await exists(join(repo, "HEAD")))) return [];
+  const head = tip ?? (await revParse(repo, `refs/heads/${await taskBranch(ctx, campaign, attr)}`));
+  if (head === null) return [];
+  // With `-z`, a NUL byte also follows each commit: thus the output is a list of fields, three for each commit.
+  const fields = (await git(repo, ["log", "-z", "--format=%H%x00%s%x00%B", "--end-of-options", `${base}..${head}`])).split("\0");
+  const out: CommitProblems[] = [];
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const [sha = "", subject = "", message = ""] = fields.slice(i, i + 3);
+    const ai = message.split("\n").filter((line) => COAUTHORED.test(line) && AI.test(line.slice("Co-authored-by:".length)));
+    const problems = [...(ASSISTED.test(message) ? [] : [NO_ASSISTED]), ...ai.map((line) => aiCoauthor(line.trimEnd()))];
+    if (problems.length > 0) out.push({ sha, subject, problems });
+  }
+  return out;
+}
+
+/** The text of one commit of `commitProblems`: `commit <short sha>: <problems>`. */
+export const problemText = (p: CommitProblems) => `commit ${p.sha.slice(0, 12)}: ${p.problems.join(", ")}`;
 
 /**
  * Pushes the branch to the fork with SSH. `expected` is the commit of the last push of patchix. When it is set, the

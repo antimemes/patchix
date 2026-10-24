@@ -15,6 +15,7 @@ import {
   adopt,
   askDir,
   cloneBase,
+  commitProblems,
   createOrUpdatePr,
   draftFromRun,
   exists,
@@ -75,7 +76,8 @@ words = [
  * The agent of the test. A run: one commit in the worktree, then `description.md` and `words.txt` in the run
  * directory. An ask: a reply on `stdout` and a change that is not committed. With `PATCHIX_TEST_NO_CONVERSATION`,
  * `--continue` gives an error. With `PATCHIX_TEST_NO_FIX`, a run makes no commit and writes a description with the
- * heading `## No small fix`; with the value `dirty`, it also changes a file.
+ * heading `## No small fix`; with the value `dirty`, it also changes a file. With `PATCHIX_TEST_NO_TRAILER`, the commit has
+ * a `Co-Authored-By` line and no `Assisted-by` line.
  */
 const CLAUDE = `#!/bin/sh
 set -e
@@ -95,7 +97,9 @@ echo "fake claude in $(pwd)"
 case "$NIX_CONFIG" in *"access-tokens = github.com=$GH_TOKEN") echo "nix has the token";; esac
 if [ -n "$PATCHIX_TEST_SLEEP" ]; then sleep 30; fi
 echo 'ca = "cacert";' >> pkgs/foo/default.nix
-git -c user.name=t -c user.email=t@example.com commit -q -am "foo: use cacert bundle instead of bundled CA file" -m "Assisted-by: Claude Code (Claude Opus 5.5)"
+trailer="Assisted-by: Claude Code (Claude Opus 5.5) with patchix"
+if [ -n "$PATCHIX_TEST_NO_TRAILER" ]; then trailer="Co-Authored-By: Claude <noreply@anthropic.com>"; fi
+git -c user.name=t -c user.email=t@example.com commit -q -am "foo: use cacert bundle instead of bundled CA file" -m "$trailer"
 cat > "$PATCHIX_RUN_DIR/description.md" <<'MD'
 Part of #1.
 
@@ -158,7 +162,7 @@ before(async () => {
   // The runs and the asks use the model of the settings.
   await writeSettings(ctx, { fork: "someone", model: "claude-opus-5-6", concurrency: 2 });
   campaign = await readCampaign(ctx, "t");
-  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **foo** — `/share/foo/ca.pem` · trusts AAA\n- [ ] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n") });
+  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **foo** — `/share/foo/ca.pem` · trusts AAA\n- [ ] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n- [ ] **quux** — `/e`\n") });
 });
 
 after(async () => {
@@ -216,7 +220,7 @@ test("a run with a commit, a description and a check that passes is ok", async (
   const commits = await runCommits(ctx, "t", "foo", run.id);
   assert.deepEqual(
     commits.map(({ sha, subject, message }) => ({ sha, subject, message })),
-    [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", message: "foo: use cacert bundle instead of bundled CA file\n\nAssisted-by: Claude Code (Claude Opus 5.5)" }],
+    [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", message: "foo: use cacert bundle instead of bundled CA file\n\nAssisted-by: Claude Code (Claude Opus 5.5) with patchix" }],
     "the message of a commit has its trailer line",
   );
   assert.match(commits[0]?.patch ?? "", /^diff --git a\/pkgs\/foo\/default.nix b\/pkgs\/foo\/default.nix\n[^]*\n\+ca = "cacert";\n$/, "the patch is the diff of the commit only");
@@ -332,6 +336,23 @@ test("a run with a check that does not pass is unverified; with a check that sto
     await assert.rejects(createOrUpdatePr(ctx, "t", "qux", { confirmed: true }), (e: Error & { status?: number }) => e.status === 409 && /is not ok or unverified/.test(e.message));
   } finally {
     delete process.env["PATCHIX_TEST_CHECK"];
+  }
+});
+
+test("a commit that does not agree with the automation/AI policy does not change the status of the run", async () => {
+  process.env["PATCHIX_TEST_NO_TRAILER"] = "1";
+  try {
+    const run = await startRun(ctx, "t", "quux");
+    assert.deepEqual([run.status, run.error, run.commits, run.checks.map((c) => c.status)], ["ok", null, 1, ["pass"]]);
+    const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
+    assert.deepEqual(await commitProblems(ctx, campaign, "quux", run.base, null), [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", problems }]);
+    await draftFromRun(ctx, "t", "quux", run.id);
+    await assert.rejects(createOrUpdatePr(ctx, "t", "quux", { confirmed: true }), (e: Error & { status?: number }) => {
+      assert.deepEqual([e.status, e.message, publishLogOf(e)], [409, `the branch does not agree with the automation/AI policy of nixpkgs: commit ${run.head?.slice(0, 12)}: ${problems.join(", ")}`, null]);
+      return true;
+    });
+  } finally {
+    delete process.env["PATCHIX_TEST_NO_TRAILER"];
   }
 });
 

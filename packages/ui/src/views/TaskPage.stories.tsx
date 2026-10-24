@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { within } from "storybook/test";
+import { expect, within } from "storybook/test";
 import type { Pr as PrMeta, TaskView } from "@patchix/common";
 import { TaskPage, type PageTab } from "./TaskPage.tsx";
 import { withMock, type MockCampaign } from "../mock/client.tsx";
@@ -21,6 +21,7 @@ import {
   runningRun,
   stoppedRun,
   task,
+  trailerProblems,
   unverifiedRun,
   wontfixRun,
   worktreePath,
@@ -84,7 +85,7 @@ export const RunCommits: Story = {
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("tab", { name: "Commits" }));
     const list = await canvas.findByRole("list", { name: /^Commits of run / });
-    await within(list).findByText(/Assisted-by: Claude Code \(Claude Opus 5\.5\)$/);
+    await within(list).findByText(/Assisted-by: Claude Code \(Claude Opus 5\.5\) with patchix$/);
     await within(list).findByLabelText(/^Patch of commit /);
   },
 };
@@ -186,6 +187,51 @@ export const ReadyDraft: Story = {
       jobs: [job(A, "ask", 2)],
     }),
   ],
+};
+
+export const TrailerMissingWork: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: the commit of the branch names Claude in a `Co-Authored-By` line and has no `Assisted-by` line. The run is ok, and a notice above the runs gives the commit and its problems.",
+      },
+    },
+  },
+  decorators: [
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }), {
+      commitProblems: { [A]: trailerProblems(A) },
+    }),
+  ],
+  play: async ({ canvas }) => {
+    const notice = await canvas.findByRole("status", { name: "Commit problems" });
+    await within(notice).findByText(/no `Assisted-by: <tool> \(<model>\) with patchix` line, a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic\.com>$/);
+  },
+};
+
+export const TrailerMissing: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "Publish tab: the commit of the branch names Claude in a `Co-Authored-By` line and has no `Assisted-by: <tool> (<model>) with patchix` line. Thus it does not agree with the automation/AI policy of nixpkgs. The person set the tick box, but the button stays disabled. The reasons give the commit, its problems and the hint.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+      drafts: { [A]: description(A) },
+      commitProblems: { [A]: trailerProblems(A) },
+    }),
+  ],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    const reasons = await canvas.findByRole("list", { name: "Reasons that the button is disabled" });
+    await within(reasons).findByText(/^Commit 9e8d7c6b5a4f \(.*\): no `Assisted-by: <tool> \(<model>\) with patchix` line, a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic\.com>\.$/);
+    await within(reasons).findByText("Amend the commit in the worktree, then reload.");
+    const button = await canvas.findByRole("button", { name: "Create pull request" });
+    await expect(button).toBeDisabled();
+  },
 };
 
 export const ReadyToPublish: Story = {

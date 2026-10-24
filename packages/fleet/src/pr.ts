@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { CONFIRM_ERROR, publishable, type Campaign, type DraftInput, type LintResult, type Pr, type PublishInput } from "@patchix/common";
 import { render } from "./render.ts";
 import { addLabels, forkOf, prCreate, prEdit, prList, type ListedPr } from "./github.ts";
-import { branchOf, push, removeWorktree, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
+import { branchOf, commitProblems, problemText, push, removeWorktree, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
 import { lintText } from "./lint.ts";
 import { CaptureError, type Log } from "./proc.ts";
 import { parseWords } from "./run.ts";
@@ -124,7 +124,8 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
  * adds the labels. A new pull request gets its description two times: the second time has its number. After the
  * push, the worktree is removed when it has no change that is not committed. These conditions give an error: no
  * draft, memelint findings and a newest run that is not `ok` or `unverified`. A job of the task and a pull request
- * that is `merged` or `closed` also give an error.
+ * that is `merged` or `closed` also give an error. A commit of the branch with a problem also gives an error: see
+ * `commitProblems`.
  *
  * After the conditions, each command and its output go into `publish.log` of the task, also after an error. The file
  * has only the commands of the newest request. It gets each line at the time of the line: thus the page can show the
@@ -148,7 +149,9 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     if (findings.length > 0) fail(409, `the draft has ${findings.length} memelint findings`);
     const newest = (await listRuns(ctx, c, attr))[0];
     // A person examined an `unverified` run on the page: the tick box of `input` shows it.
-    if (!publishable(newest)) fail(409, `the newest run of ${attr} is not ok or unverified`);
+    if (newest === undefined || !publishable(newest)) fail(409, `the newest run of ${attr} is not ok or unverified`);
+    const problems = await commitProblems(ctx, campaign, attr, newest.base, null);
+    if (problems.length > 0) fail(409, `the branch does not agree with the automation/AI policy of nixpkgs: ${problems.map(problemText).join("; ")}`);
 
     const log = await publishLog(ctx, c, attr, `# publish of ${c}/${attr}, ${now()}`);
     try {

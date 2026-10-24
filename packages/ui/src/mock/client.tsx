@@ -1,7 +1,7 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
 import { publishable } from "@patchix/common/status";
-import type { Ask, Campaign, CampaignSummary, CampaignView, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
+import type { Ask, Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
 import * as f from "./fixtures.ts";
@@ -19,6 +19,8 @@ export interface MockCampaign {
   drafts?: Record<string, string>;
   /** `publish.log` of each task. */
   publishLogs?: Record<string, string>;
+  /** The commits of the branch of each task with a problem. See `TaskDetail.commit_problems`. */
+  commitProblems?: Record<string, CommitProblems[]>;
   /** The labels of the issue repository. The default is `LABELS`. */
   labels?: Label[];
 }
@@ -49,6 +51,7 @@ interface State {
   asks: Map<string, Ask[]>;
   drafts: Map<string, string>;
   publishLogs: Map<string, string>;
+  commitProblems: Map<string, CommitProblems[]>;
   labels: Label[];
 }
 
@@ -67,6 +70,7 @@ export function mockClient(options: MockOptions): Client {
       asks: new Map(Object.entries(m.asks ?? {})),
       drafts,
       publishLogs: new Map(Object.entries(m.publishLogs ?? {})),
+      commitProblems: new Map(Object.entries(m.commitProblems ?? {})),
       labels: m.labels ?? f.LABELS,
     });
   }
@@ -99,7 +103,7 @@ export function mockClient(options: MockOptions): Client {
     const draft = t.pr_meta === null ? null : (s.drafts.get(attr) ?? null);
     const rendered = draft === null || t.pr_meta === null ? null : f.fakeRender(draft, attr, t.pr_meta.number);
     const lint = draft === null ? null : f.fakeLint(draft);
-    return { campaign: s.campaign, task: t, asks: s.asks.get(attr) ?? [], draft, rendered, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null };
+    return { campaign: s.campaign, task: t, asks: s.asks.get(attr) ?? [], draft, rendered, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
   }
   const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, tasks: s.tasks });
 
@@ -275,6 +279,8 @@ export function mockClient(options: MockOptions): Client {
       if (findings > 0) fail(409, `the draft has ${findings} memelint findings`);
       const run = t.runs[0];
       if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
+      const problems = s.commitProblems.get(attr) ?? [];
+      if (problems.length > 0) fail(409, `the branch does not agree with the automation/AI policy of nixpkgs: ${problems.map((p) => `commit ${p.sha.slice(0, 12)}: ${p.problems.join(", ")}`).join("; ")}`);
       const number = meta.number ?? 580201;
       for (const step of f.logSteps(typeof failedLog === "string" ? failedLog : f.publishLog(attr, number))) {
         s.publishLogs.set(attr, step);

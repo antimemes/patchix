@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { JobStatus, TaskDetail, TaskView } from "@patchix/common";
+import type { CommitProblems, JobStatus, TaskDetail, TaskView } from "@patchix/common";
 import { Badge, StateChip } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
 import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
@@ -37,6 +37,23 @@ function useTab(): [PageTab, (tab: PageTab) => void] {
     window.history.replaceState(window.history.state, "", `${pathname}${search}#${next}`);
   }, []);
   return [tab, choose];
+}
+
+/** The commits of the branch that do not agree with the `automation/AI policy` of nixpkgs. See `TaskDetail.commit_problems`. */
+function CommitProblemsNotice({ problems }: { problems: CommitProblems[] }) {
+  if (problems.length === 0) return null;
+  return (
+    <Notice tone="warning" aria-label="Commit problems">
+      <p>The branch does not agree with the automation/AI policy of nixpkgs. The pull request button stays disabled. Amend the commit in the worktree, then reload.</p>
+      <ul className="reasons">
+        {problems.map((p) => (
+          <li key={p.sha}>
+            commit <span className="mono">{short(p.sha)}</span>: {p.problems.join(", ")}
+          </li>
+        ))}
+      </ul>
+    </Notice>
+  );
 }
 
 export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string }) {
@@ -107,6 +124,7 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
                   {stop.error !== null && <Notice tone="error">Stop: {stop.error}</Notice>}
                   <WorktreeRow campaign={c} task={task} onDetail={detail.replace} onChanged={detail.reload} />
                 </section>
+                <CommitProblemsNotice problems={detail.data.commit_problems} />
                 <RunsSection campaign={campaign} task={task} />
                 <AsksSection campaign={c} attr={attr} asks={detail.data.asks} onAsked={detail.reload} />
               </div>

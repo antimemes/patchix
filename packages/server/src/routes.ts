@@ -74,15 +74,28 @@ async function summaries(ctx: fleet.Ctx): Promise<CampaignSummary[]> {
   return out;
 }
 
-/** The task with its draft. memelint examines the draft each time: the time of memelint is less than one second. */
+/**
+ * The task with its draft. memelint examines the draft each time: the time of memelint is less than one second.
+ * `git log` examines the commits from the base of the newest run to the tip of the branch each time.
+ */
 async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDetail> {
+  const campaign = await fleet.readCampaign(ctx, c);
   const task = await fleet.taskView(ctx, c, attr);
   const lint = await fleet.lintDraft(ctx, c, attr).catch((e: unknown) => {
     console.error(`lint ${c}/${attr}: ${fleet.message(e)}`);
     return null;
   });
+  const base = task.runs[0]?.base ?? "";
+  // When `git log` gives an error, the page shows no problem. The pull request route examines the commits again and gives the error.
+  const problems =
+    base === "" || task.head === null
+      ? []
+      : await fleet.commitProblems(ctx, campaign, attr, base, task.head).catch((e: unknown) => {
+          console.error(`commits ${c}/${attr}: ${fleet.message(e)}`);
+          return [];
+        });
   return {
-    campaign: await fleet.readCampaign(ctx, c),
+    campaign,
     task,
     asks: await fleet.listAsks(ctx, c, attr),
     draft: await fleet.readDraft(ctx, c, attr),
@@ -90,6 +103,7 @@ async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDeta
     lint,
     campaign_words: await fleet.campaignWords(ctx, c),
     publish_log: await fleet.readPublishLog(ctx, c, attr),
+    commit_problems: problems,
   };
 }
 

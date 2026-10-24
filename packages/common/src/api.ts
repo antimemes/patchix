@@ -43,7 +43,7 @@
  *   writes its description again, sets the labels and gives `TaskDetail`. A different body or no body gives 409 with
  *   the error `CONFIRM_ERROR`. When the request has no error, `pr.yaml` gets the time of the request in `confirmed`. The draft must have
  *   no lint findings, the newest run must be `ok` and the task must have no job: if not, it gives 409. It also gives 409 for a pull request that is `merged` or
- *   `closed`. When the pull request is made, the worktree is removed. After these conditions, each command (`git push`,
+ *   `closed`, and for a commit of the branch with a problem (see `TaskDetail.commit_problems`). When the pull request is made, the worktree is removed. After these conditions, each command (`git push`,
  *   `git worktree remove`, `gh api` for the pull request and for the labels) and its `stdout` and `stderr` go into
  *   `publish.log` of the task. Each request writes the file again. The `TaskDetail` has the file in `publish_log`.
  *   Each error of this route is a `PublishError`: its `publish_log` is the log of this request, or `null` when no
@@ -110,6 +110,17 @@ export const LintResultSchema = z.object({
 });
 export type LintResult = z.infer<typeof LintResultSchema>;
 
+/** One commit of the branch with a problem: see `TaskDetail.commit_problems`. */
+export const CommitProblemsSchema = z.object({
+  /** The full commit id. */
+  sha: z.string(),
+  /** The first line of the commit message. */
+  subject: z.string(),
+  /** For example "no `Assisted-by: <tool> (<model>) with patchix` line" or "a `Co-authored-by` line names an AI: <line>". */
+  problems: z.array(z.string()),
+});
+export type CommitProblems = z.infer<typeof CommitProblemsSchema>;
+
 export const TaskDetailSchema = z.object({
   campaign: CampaignSchema,
   task: TaskViewSchema,
@@ -128,6 +139,14 @@ export const TaskDetailSchema = z.object({
   campaign_words: z.array(z.string()),
   /** `publish.log`: the commands of the newest `POST .../pr` and their output. `null` when the file is not there. */
   publish_log: z.string().nullable(),
+  /**
+   * The commits from the `base` of the newest run to the tip of the branch that do not agree with the
+   * `automation/AI policy` of nixpkgs, the newest first. Each commit must have a line that agrees with
+   * `^Assisted-by: .+ \(.+\) with patchix$`. A line that agrees with `/^Co-authored-by:/i` must not name an AI,
+   * for example `/claude|copilot|gemini/i`. A line that names a person has no problem. An empty list when each
+   * commit agrees, or when the task has no run or no branch. With a commit in this list, `POST .../pr` gives 409.
+   */
+  commit_problems: z.array(CommitProblemsSchema),
 });
 export type TaskDetail = z.infer<typeof TaskDetailSchema>;
 
