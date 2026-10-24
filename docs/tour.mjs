@@ -3,7 +3,7 @@
 // Use: `node docs/tour.mjs <base URL> [output directory] [--light]`. Without an output directory, the script writes the
 // file into the directory of the script. The page shows its `dark` colors; `--light` gives the `light` colors.
 // For example:
-//   `nix-shell -p nodejs chromium ffmpeg --run 'node docs/tour.mjs http://127.0.0.1:8788/'`
+//   `nix-shell -p nodejs chromium ffmpeg dejavu_fonts --run 'node docs/tour.mjs http://127.0.0.1:8788/'`
 // The variables `CHROMIUM` and `FFMPEG` give different commands.
 //
 // RULE: the server shows live data. The tour must not change the data.
@@ -15,8 +15,8 @@
 // The script also stops each request that is not GET.
 // It stops the tour when a click is not on the correct part of the page.
 //
-// The data is live. When no task has the state `ready`, the tour does not show step 2. When no run operates, the tour
-// does not show step 3. The script writes the cause to `stderr`.
+// The data is live. When no task has the state `ready`, the tour shows only step 1. The script writes the cause to
+// `stderr`.
 
 import { spawn, spawnSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -36,6 +36,8 @@ const outDir = resolve(outArg ?? dirname(fileURLToPath(import.meta.url)));
 const WIDTH = 1280;
 const HEIGHT = 800;
 const FPS = 30;
+// The task of step 2, when its state is `ready`. If not, step 2 shows the first task with the state `ready`.
+const PREFERRED_TASK = "pgsql-tools";
 
 // The text of each control that the tour must not click.
 const FORBIDDEN = /^(Queue|Queue selected.*|Queue again|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Ask.*|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Create pull request|Update pull request|Replace|×)$/;
@@ -161,10 +163,6 @@ try {
       await sleep(ms);
     }
   };
-  // `go` changes the path of the page without a new page, as a link of the client does.
-  const go = async (path) => {
-    await js(`(history.pushState(null, "", ${q(path)}), scrollTo(0, 0), dispatchEvent(new PopStateEvent("popstate")), true)`);
-  };
   // `to` has numbers or page expressions for `top` and `left`, and a text for `text`.
   const scroll = (scroller, to, ms) => {
     const fields = Object.entries(to).map(([k, v]) => `${k}: ${k === "text" ? q(v) : v}`);
@@ -186,10 +184,8 @@ try {
       return false;
     }
   };
-  // The task of step 2 is `n98-magerun2` when its state is `ready`: its run has the live test. If not, it is the first
-  // task with the state `ready`.
   const { tasks } = await api("");
-  const ready = tasks.find((t) => t.state === "ready" && t.attr === "n98-magerun2") ?? tasks.find((t) => t.state === "ready");
+  const ready = tasks.find((t) => t.state === "ready" && t.attr === PREFERRED_TASK) ?? tasks.find((t) => t.state === "ready");
   if (ready === undefined) console.error("No task is ready. The tour does not show step 2.");
 
   // The script opens the task list of `cacert` before it starts to record: the jobs show at the start of the
@@ -217,7 +213,7 @@ try {
 
   // 1. The task list of `cacert` (3 s): the jobs, the queue and the fleet. Then move down the table to the task of
   // step 2 and open that task.
-  await sleep(1000);
+  await sleep(1300);
   await moveTo(WIDTH / 2, 640, 300);
   if (ready !== undefined) {
     const row = `__tour.find("tbody a", ${q(ready.attr)})`;
@@ -225,59 +221,67 @@ try {
     await click(row, 400);
   } else {
     await scroll("null", { top: 520 }, 900);
-    await sleep(300);
+    await sleep(1500);
   }
 
-  // 2. The task with the state `ready`. The `Work` tab (20 s): the issue entry, the commits, the full diff, the checks.
   if (ready !== undefined) {
-    const runs = `document.querySelector('[aria-label="Runs"]')`;
+    // 2. The `Work` tab of the task with the state `ready` (17 s): the issue entry, the full diff, the commits and the
+    // output of the check. The tabs of the run stay below the header of the page.
+    const files = `document.querySelector('[role="tablist"][aria-label^="Files of run"]')`;
     await waitFor(`${tabEl("Full diff")} && __tour.textNode("diff --git")`);
     await hover(`document.querySelector('[aria-label="Issue entry"]')`, 600);
-    await sleep(1200);
-    // The commits are short: the tour selects `Commits` before it moves down the page.
+    await sleep(1400);
+    // The full diff (5 s). When the page cannot show all of the diff, the diff moves down to the `postInstall`
+    // lines of `pgsql-tools`, or to its end.
+    await scroll("null", { top: `__tour.top(${files}) - 64` }, 1000);
+    const diffBox = `__tour.scroller(__tour.textNode("diff --git"))`;
+    if (await js(`!!${diffBox}`)) {
+      const to = (await js(`!!__tour.textNode("postInstall", ${diffBox})`)) ? { text: "postInstall", offset: 260 } : { top: `${diffBox}.scrollHeight` };
+      await scroll(diffBox, to, 1300);
+    }
+    await sleep(4000);
+
+    // `Commits` (3 s): the message of each commit, with its last line, for example `Assisted-by:`.
     await click(tabEl("Commits"), 450);
-    await sleep(1700);
-    await click(tabEl("Full diff"), 400);
-    await waitFor(`__tour.textNode("diff --git")`);
-    await sleep(200);
-    await scroll("null", { top: `__tour.top(${runs}) - 56` }, 900);
-    // The diff of `n98-magerun2` adds `postInstall`. A different diff moves down a small distance.
-    const hunk = (await js(`!!__tour.textNode("postInstall")`)) ? { text: "postInstall", offset: 110 } : { top: 200 };
-    await scroll(`__tour.scroller(__tour.textNode("diff --git"))`, hunk, 2400);
-    await sleep(2500);
+    const message = `document.querySelector(".commit-message")`;
+    if (await found(message, 4000)) {
+      const below = `__tour.top(${message}) + ${message}.offsetHeight - scrollY - ${HEIGHT - 60}`;
+      if ((await js(below)) > 0) await scroll("null", { top: `scrollY + ${below}` }, 600);
+    }
+    await sleep(3000);
+
+    // `Checks` (4 s): the output of the check moves down to the `VERDICT` lines.
     await click(tabEl("Checks", true), 450);
+    await scroll("null", { top: `__tour.top(${files}) - 64` }, 400);
     if (await found(`__tour.textNode("VERDICT")`, 6000)) {
       const out = `__tour.scroller(__tour.textNode("VERDICT"))`;
-      await scroll("null", { top: `__tour.top(${runs}) - 56` }, 400);
-      await scroll(out, { text: "VERDICT", offset: 150 }, 1200);
-      await sleep(2000);
-      await scroll(out, { top: `(${out})?.scrollHeight ?? scrollY` }, 1400);
-      await sleep(2300);
+      if (await js(`!!${out}`)) await scroll(out, { text: "VERDICT", offset: 90 }, 1300);
     } else {
-      await sleep(3000);
+      console.error("The output of the check has no `VERDICT` line.");
     }
+    await sleep(3000);
 
-    // The `Publish` tab (14 s): the draft and the `Preview` with the AI disclosure and the output of the check.
-    // Then the labels and the button that makes the pull request.
-    await scroll("null", { top: 0 }, 500);
+    // 3. The `Publish` tab (16 s): the draft and the `Preview` with the AI disclosure and the output of the check.
+    // Then the labels and the button that makes the pull request. The tour stops on that button.
+    await scroll("null", { top: 0 }, 700);
     await click(tabEl("Publish"), 400);
     await waitFor(`document.querySelector(".publish-preview details")`);
-    await sleep(1400);
+    await sleep(1800);
     const preview = `document.querySelector(".publish-preview")`;
     const alert = `document.querySelector(".publish-preview .md-alert")`;
     const summary = `document.querySelector(".publish-preview details > summary")`;
     if (await js(`!!${alert}`)) {
       await scroll(preview, { top: `__tour.within(${preview}, ${alert}) - 70` }, 900);
-      await sleep(1600);
+      await sleep(2000);
     }
     await scroll(preview, { top: `__tour.within(${preview}, ${summary}) - 160` }, 700);
     await click(summary, 400);
     await sleep(500);
     await scroll(preview, { top: `__tour.within(${preview}, ${summary}) - 20` }, 900);
-    await sleep(1500);
+    await sleep(2200);
     await click(`document.querySelector(".ui-labels-input")`, 500);
     await waitFor(`document.querySelector(".ui-labels-popup")`, 4000);
-    await sleep(1300);
+    await sleep(1600);
     await key("Escape", 27);
     await sleep(200);
     // The pointer stops on `Create pull request`. The tour does not click it.
@@ -285,37 +289,8 @@ try {
     await scroll("null", { top: `__tour.top(${create}) - 600` }, 700);
     if (await js(`${create}.disabled`)) console.error("The button `Create pull request` is disabled.");
     await hover(create, 500);
-    await sleep(1600);
+    await sleep(2500);
   }
-
-  // 3. A task with a run that operates (6 s): the state `running`, the text about the zellij tab, the prompt.
-  const job = (await api("/jobs")).jobs.find((j) => j.kind === "run");
-  if (job === undefined) {
-    console.error("No run operates. The tour does not show step 3.");
-  } else {
-    await moveTo(WIDTH / 2, 60, 300);
-    await go(`/c/${CAMPAIGN}/t/${encodeURIComponent(job.attr)}#work`);
-    const attach = `__tour.find("code", "zellij attach patchix")`;
-    if (await found(`__tour.find(".ui-badge", "running") && ${attach} && ${tabEl("Prompt")}`, 6000)) {
-      await hover(`__tour.find(".ui-badge", "running")`, 450);
-      await sleep(1000);
-      await hover(attach, 500);
-      await sleep(1500);
-      await click(tabEl("Prompt"), 400);
-      await sleep(300);
-      await scroll("null", { top: 240 }, 700);
-      await sleep(1400);
-    } else {
-      console.error(`The run of ${job.attr} stopped before the tour opened its task.`);
-      await sleep(2000);
-    }
-  }
-
-  // 4. The task list of `cacert` again (2 s).
-  await moveTo(WIDTH / 2, 20, 250);
-  await go(`/c/${CAMPAIGN}`);
-  await waitFor(`document.querySelectorAll("tbody tr").length > 20`);
-  await sleep(2000);
 
   clearInterval(clock);
   await send("Page.stopScreencast");
@@ -363,8 +338,9 @@ function pageHelpers() {
       }
       return null;
     },
-    textNode(text) {
-      const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    // `textNode` gives the first text node in `root` that shows on the page and contains `text`.
+    textNode(text, root = document.body) {
+      const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       for (let n = walk.nextNode(); n !== null; n = walk.nextNode()) {
         if (n.data.includes(text) && visible(n.parentElement)) return n;
       }
@@ -401,12 +377,12 @@ function pageHelpers() {
       return control instanceof HTMLInputElement ? "" : control.textContent.trim();
     },
     // Scroll `scroller` (the page when it is null) with an easing curve. `to.top` and `to.left` are numbers; `to.text`
-    // scrolls to the first line with that text, `to.offset` pixels below the top.
+    // scrolls to the first line in `scroller` with that text, `to.offset` pixels below the top.
     scroll(scroller, to, ms) {
       const el = scroller ?? document.scrollingElement;
       let top = to.top ?? el.scrollTop;
       if (to.text !== undefined) {
-        const node = window.__tour.textNode(to.text);
+        const node = window.__tour.textNode(to.text, scroller ?? document.body);
         const range = document.createRange();
         const at = node.data.indexOf(to.text);
         range.setStart(node, at);
