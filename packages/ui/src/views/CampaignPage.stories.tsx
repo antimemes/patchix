@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import type { Campaign } from "@patchix/common";
 import { CampaignPage } from "./CampaignPage.tsx";
 import { withMock } from "../mock/client.tsx";
+import { replaceParams } from "../router.ts";
 import { CAMPAIGN, at, job, mixedTasks, runningRun, task, worktreePath } from "../mock/fixtures.ts";
 
 const ISSUE_TASKS = ["anki", "arduino-core", "autopsy", "calibre", "electrum", "gajim", "python3Packages.wassima", "zotero"];
@@ -10,6 +11,8 @@ const meta = {
   title: "Storylines/Campaign page",
   component: CampaignPage,
   args: { campaign: "cacert" },
+  // The page reads the selected states and the attribute text from the URL query when it starts. Each story starts with an empty query.
+  beforeEach: () => replaceParams({ state: "", q: "" }),
 } satisfies Meta<typeof CampaignPage>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -118,6 +121,15 @@ const NO_SOURCE: Campaign = {
 export const NoSource: Story = {
   parameters: { docs: { description: { story: "8. Without a `source` command: no source column." } } },
   decorators: [withMock(() => ({ campaigns: [{ campaign: NO_SOURCE, synced: at(42), tasks: mixedTasks().map((t) => ({ ...t, in_source: false, in_issue: true })) }] }))],
+};
+
+export const FilterInUrl: Story = {
+  parameters: { docs: { description: { story: "9. The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=python`. Back from a task page shows the same tasks." } } },
+  beforeEach: () => replaceParams({ state: "ready,merged", q: "python" }),
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks() }] }))],
+  play: async ({ canvas }) => {
+    await canvas.findByText("Select the 2 shown tasks");
+  },
 };
 
 export const Error: Story = {

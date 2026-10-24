@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Campaign, TaskState, TaskView } from "@patchix/common";
 import { Badge, STATE_TONE, StateChip } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
@@ -14,10 +14,15 @@ import { Tooltip } from "../components/Tooltip.tsx";
 import { useClient } from "../client.tsx";
 import { STATES, issueUrl, plural, time } from "../format.ts";
 import { useAction, useDebounced, useLoad, useSignals } from "../hooks.ts";
-import { href } from "../router.ts";
+import { href, param, replaceParams } from "../router.ts";
 import { JobsStrip, NO_JOBS } from "./JobsStrip.tsx";
 import { PrCell, RunBadges } from "./shared.tsx";
 import "./views.css";
+
+/** The states of the `state` parameter of the URL. A value that is not a state is ignored. */
+function readStates(): TaskState[] {
+  return STATES.filter((s) => param("state").split(",").includes(s));
+}
 
 export function CampaignPage({ campaign: name }: { campaign: string }) {
   const client = useClient();
@@ -40,8 +45,10 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
     }
   });
 
-  const [states, setStates] = useState<TaskState[]>([]);
-  const [query, setQuery] = useState("");
+  // The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=text`. Thus Back from a task page shows the same tasks, and a person can send the link.
+  const [states, setStates] = useState<TaskState[]>(readStates);
+  const [query, setQuery] = useState(() => param("q"));
+  useEffect(() => replaceParams({ state: states.join(","), q: query }), [states, query]);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 
   const sync = useAction(async () => {

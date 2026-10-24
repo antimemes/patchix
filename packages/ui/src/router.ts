@@ -18,6 +18,7 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/** The path of the URL. The query and the hash are not in it: `route` does not read them. */
 export function usePath(): string {
   return useSyncExternalStore(subscribe, () => window.location.pathname);
 }
@@ -54,3 +55,24 @@ export const href = {
   campaign: (c: string) => `/c/${encodeURIComponent(c)}`,
   task: (c: string, attr: string) => `/c/${encodeURIComponent(c)}/t/${encodeURIComponent(attr)}`,
 };
+
+/** The value of the query parameter `name` of the URL of the page, or "" when the URL does not have it. */
+export function param(name: string): string {
+  return new URLSearchParams(window.location.search).get(name) ?? "";
+}
+
+/**
+ * Write the query parameters of `values` into the URL of the page. An empty value removes its parameter. The other parameters do not change.
+ * This replaces the URL and does not add a page to `history`. Thus Back goes to the previous page, not to the previous value.
+ */
+export function replaceParams(values: Record<string, string>): void {
+  const params = new URLSearchParams(window.location.search);
+  for (const [name, value] of Object.entries(values)) {
+    if (value === "") params.delete(name);
+    else params.set(name, value);
+  }
+  // Keep `,` in the query, not `%2C`: `?state=ready,merged`.
+  const search = params.toString().replaceAll("%2C", ",");
+  const { pathname, hash } = window.location;
+  window.history.replaceState(window.history.state, "", `${pathname}${search === "" ? "" : `?${search}`}${hash}`);
+}
