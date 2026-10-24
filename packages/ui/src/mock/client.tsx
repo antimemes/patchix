@@ -156,8 +156,12 @@ export function mockClient(options: MockOptions): Client {
       }),
     commits: (c, attr, id) =>
       answer("commits", () => {
-        const run = taskOf(state(c), attr).runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
-        return run.head === null ? [] : f.commits(attr);
+        const t = taskOf(state(c), attr);
+        const run = t.runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
+        // As the server: the list of the newest run ends at the tip of the branch. See `RunCommitsSchema`.
+        const tip = t.runs[0]?.id === id && run.status !== "running" ? t.head : null;
+        if (run.head !== null && tip !== null && tip !== run.head) return f.movedCommits(attr, tip);
+        return run.head === null ? { commits: [], head: null, moved: false } : f.commits(attr);
       }),
     checkOutput: (c, attr, id, check) =>
       answer("checkOutput", () => {

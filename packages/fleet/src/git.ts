@@ -12,10 +12,10 @@
  */
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Campaign, Commit, CommitProblems, Task } from "@patchix/common";
+import type { Campaign, Commit, CommitProblems, RunCommits, Task } from "@patchix/common";
 import { forkOf } from "./github.ts";
 import { capture, type CaptureOptions, type Log } from "./proc.ts";
-import { exists, fail, readRun, readTasks, type Ctx } from "./store.ts";
+import { exists, fail, listRuns, readCampaign, readRun, readTasks, type Ctx } from "./store.ts";
 
 const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote"]);
 const REFUSED = /^--(depth|deepen|unshallow)/;
@@ -227,17 +227,26 @@ export async function commitList(cwd: string, from: string, to: string): Promise
 }
 
 /**
- * The commits of a run, from its base to its head, in the bare repository. A run without a head gives an empty
- * list. A run with a commit that the repository does not have gives an error.
+ * The commits of a run in the bare repository, from its base to a head. See `RunCommitsSchema`. For the newest run of
+ * the task, the head is the tip of the branch of the task. A person can change the branch after the run. For the other
+ * runs and for a run that operates, the head is the head of the run. It is also the head of the run when the
+ * repository does not have the branch. Without a head, the list is empty. A commit that the repository does not have
+ * gives an error.
  */
-export async function runCommits(ctx: Ctx, c: string, attr: string, id: string): Promise<Commit[]> {
+export async function runCommits(ctx: Ctx, c: string, attr: string, id: string): Promise<RunCommits> {
   const run = await readRun(ctx, c, attr, id);
-  if (run.head === null) return [];
   const repo = repoPath(ctx);
-  for (const sha of [run.base, run.head]) {
-    if (!(await exists(join(repo, "HEAD"))) || (await revParse(repo, sha)) === null) fail(404, `the repository of patchix does not have the commit ${sha} of the run ${id}`);
+  const repoThere = await exists(join(repo, "HEAD"));
+  const newest = (await listRuns(ctx, c, attr))[0];
+  // The agent of a run that operates changes the branch. A run without a base stopped before it made the worktree.
+  const fromBranch = repoThere && newest?.id === id && newest.status !== "running" && run.base !== "";
+  const tip = fromBranch ? await revParse(repo, `refs/heads/${await taskBranch(ctx, await readCampaign(ctx, c), attr)}`) : null;
+  const head = tip ?? run.head;
+  if (head === null) return { commits: [], head: null, moved: false };
+  for (const sha of [run.base, head]) {
+    if (!repoThere || (await revParse(repo, sha)) === null) fail(404, `the repository of patchix does not have the commit ${sha} of the run ${id}`);
   }
-  return commitList(repo, run.base, run.head);
+  return { commits: await commitList(repo, run.base, head), head, moved: head !== (run.head ?? run.base) };
 }
 
 /** The line of the `automation/AI policy` of nixpkgs: `Assisted-by: <tool> (<model>) with patchix`. */

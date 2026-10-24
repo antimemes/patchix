@@ -217,7 +217,8 @@ test("a run with a commit, a description and a check that passes is ok", async (
   const rendered = (await renderDraft(ctx, "t", "foo")) ?? "";
   assert.ok(!rendered.includes("{{"), rendered);
   assert.match(rendered, /harness foo --pr <this PR>/);
-  const commits = await runCommits(ctx, "t", "foo", run.id);
+  const { commits, head, moved } = await runCommits(ctx, "t", "foo", run.id);
+  assert.deepEqual([head, moved], [run.head, false]);
   assert.deepEqual(
     commits.map(({ sha, subject, message }) => ({ sha, subject, message })),
     [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", message: "foo: use cacert bundle instead of bundled CA file\n\nAssisted-by: Claude Code (Claude Opus 5.5) with patchix" }],

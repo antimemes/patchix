@@ -4,6 +4,7 @@ import type { Pr as PrMeta, TaskView } from "@patchix/common";
 import { TaskPage, type PageTab } from "./TaskPage.tsx";
 import { withMock, type MockCampaign } from "../mock/client.tsx";
 import {
+  AMENDED,
   CAMPAIGN,
   HEAD,
   at,
@@ -87,6 +88,24 @@ export const RunCommits: Story = {
     const list = await canvas.findByRole("list", { name: /^Commits of run / });
     await within(list).findByText(/Assisted-by: Claude Code \(Claude Opus 5\.5\) with patchix$/);
     await within(list).findByLabelText(/^Patch of commit /);
+    await expect(canvas.queryByRole("status", { name: "Branch moved" })).toBeNull();
+  },
+};
+
+export const RunCommitsMoved: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: a person changed the commit of the newest run in the worktree. The Commits tab gives the commits to the tip of the branch, and a line above the list tells that the branch moved after the run.",
+      },
+    },
+  },
+  decorators: [seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: AMENDED, worktree: worktreePath(A) }))],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("tab", { name: "Commits" }));
+    await canvas.findByRole("status", { name: "Branch moved" });
+    const list = await canvas.findByRole("list", { name: /^Commits of run / });
+    await within(list).findByText(`commit ${AMENDED.slice(0, 12)}`);
   },
 };
 

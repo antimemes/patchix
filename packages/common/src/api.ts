@@ -17,10 +17,14 @@
  * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/log` gives the log of the run as text: the lines of the runner and
  *   the output of `claude`. `.../prompt` gives the prompt of the agent (`prompt.md`), `.../diff` the diff of the run,
  *   `.../description` the `description.md` of the agent, `.../checks/:name` the output of one check.
- * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/commits` gives `Commit[]`: the commits from the `base` to the `head`
- *   of the run, the newest first, from `git log <base>..<head>` in the repository of patchix. Each commit has its full
- *   message (`git log -1 --format=%B <sha>`) and its patch (`git show --format= <sha>`), as `git show` gives them.
- *   A run without a `head` gives `[]`. When the repository does not have the `base` or the `head`, it gives 404.
+ * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/commits` gives `RunCommits`: the commits from the `base` of the run
+ *   to a `head`, the newest first, from `git log <base>..<head>` in the repository of patchix. For the newest run of
+ *   the task, the `head` is the tip of the branch of the task, as `TaskView.head`. Thus the list shows a change of the
+ *   branch after the run, for example `git commit --amend` in the worktree. For the other runs and for a run that is
+ *   `running`, the `head` is the `head` of the run. It is also the `head` of the run when the repository does not
+ *   have the branch. Each commit has its full message (`git log -1 --format=%B <sha>`) and its patch
+ *   (`git show --format= <sha>`), as `git show` gives them. Without a `head`, the list is empty. When the repository
+ *   does not have the `base` or the `head`, it gives 404.
  * - `GET /api/campaigns/:c/labels` gives `Label[]`: the labels of the issue repository, from
  *   `gh label list --repo <repo> --limit 1000 --json name,color,description`. The server keeps the list for one hour.
  * - `GET /api/campaigns/:c/jobs` gives `JobsView`: the runs and asks that operate at this time in the zellij session,
@@ -187,6 +191,20 @@ export const CommitSchema = z.object({
   patch: z.string(),
 });
 export type Commit = z.infer<typeof CommitSchema>;
+
+/** The commits of a run: see the route `GET .../runs/:run/commits`. */
+export const RunCommitsSchema = z.object({
+  /** The commits from the `base` of the run to `head`, the newest first. */
+  commits: z.array(CommitSchema),
+  /** The last commit of the range: the tip of the branch or the `head` of the run. `null` when there is no `head`. */
+  head: z.string().nullable(),
+  /**
+   * `true` when the tip of the branch is not the `head` of the run, or not its `base` for a run without a `head`. Then
+   * the branch changed after the run, and the list shows the branch.
+   */
+  moved: z.boolean(),
+});
+export type RunCommits = z.infer<typeof RunCommitsSchema>;
 
 export const AskInputSchema = z.object({
   question: z.string().trim().min(1).max(4000),

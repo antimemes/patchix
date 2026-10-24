@@ -4,7 +4,6 @@ import type {
   AskInput,
   CampaignSummary,
   CampaignView,
-  Commit,
   DraftFromRun,
   DraftInput,
   Event as ServerEvent,
@@ -12,6 +11,7 @@ import type {
   JobsView,
   Label,
   PublishInput,
+  RunCommits,
   Settings,
   SettingsView,
   TaskDetail,
@@ -49,7 +49,7 @@ export interface Client {
   labels(c: string): Promise<Label[]>;
   task(c: string, attr: string): Promise<TaskDetail>;
   runFile(c: string, attr: string, run: string, file: RunFile): Promise<string>;
-  commits(c: string, attr: string, run: string): Promise<Commit[]>;
+  commits(c: string, attr: string, run: string): Promise<RunCommits>;
   checkOutput(c: string, attr: string, run: string, check: string): Promise<string>;
   jobs(c: string): Promise<JobsView>;
   /** Adds the tasks to the queue. The fleet starts their runs. */

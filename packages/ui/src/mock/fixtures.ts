@@ -1,5 +1,5 @@
 /** Data for the stories. Each time is some minutes before the start of the story. */
-import type { Ask, Campaign, CheckResult, Commit, CommitProblems, JobStatus, Label, LintResult, Pr, Run, SettingsView, TaskState, TaskView } from "@patchix/common";
+import type { Ask, Campaign, CheckResult, Commit, CommitProblems, JobStatus, Label, LintResult, Pr, Run, RunCommits, SettingsView, TaskState, TaskView } from "@patchix/common";
 
 export function at(minutesAgo: number): string {
   return new Date(Date.now() - minutesAgo * 60_000).toISOString();
@@ -275,10 +275,23 @@ export function logLines(attr: string): string[] {
   ];
 }
 
-/** The commits of a run with a head, as `git log <base>..<head>` and `git show` give them. */
-export function commits(attr: string): Commit[] {
+/** The tip of the branch after a person changed the commit of the run in the worktree, for example with `git commit --amend`. */
+export const AMENDED = "5b4a3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b";
+
+/** One commit of a run, as `git show` gives it. */
+function commit(attr: string, sha: string, body: string): Commit {
   const subject = `${attr}: use the CA bundle of cacert`;
-  return [{ sha: HEAD, subject, message: `${subject}\n\nAssisted-by: Claude Code (Claude Opus 5.5) with patchix`, patch: diff(attr) }];
+  return { sha, subject, message: `${subject}\n\n${body}Assisted-by: Claude Code (Claude Opus 5.5) with patchix`, patch: diff(attr) };
+}
+
+/** The commits of a run with a head, as `git log <base>..<head>` and `git show` give them. */
+export function commits(attr: string): RunCommits {
+  return { commits: [commit(attr, HEAD, "")], head: HEAD, moved: false };
+}
+
+/** The commits of the newest run after a person changed its commit: the list ends at the tip of the branch. */
+export function movedCommits(attr: string, tip: string): RunCommits {
+  return { commits: [commit(attr, tip, "The symlink replaces the bundle of the package.\n\n")], head: tip, moved: true };
 }
 
 /** The head of the run with the `Co-Authored-By` line of Claude Code and without the `Assisted-by` line. See `TaskDetail.commit_problems`. */

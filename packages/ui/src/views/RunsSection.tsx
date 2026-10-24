@@ -145,26 +145,35 @@ export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
 
 /**
  * The commits from the base to the head of the run, as `git show` gives them. Each commit has its short id, its full
- * message and its patch. The full message shows the last lines, for example `Assisted-by:`.
+ * message and its patch. The full message shows the last lines, for example `Assisted-by:`. For the newest run, the
+ * list ends at the tip of the branch. When the branch changed after the run, a line above the list tells it. See
+ * `RunCommits`.
  */
 function CommitsView({ campaign, attr, run, version }: { campaign: string; attr: string; run: Run; version: string }) {
   const client = useClient();
   const commits = useLoad(() => client.commits(campaign, attr, run.id), `commits:${version}`);
   if (commits.error !== null) return <Notice tone="error">{commits.error}</Notice>;
   if (commits.data === null) return <p className="small muted">Loading…</p>;
-  if (commits.data.length === 0) return <p className="muted">{run.status === "running" ? "The run did not stop. Its commits show at its end." : "No commits."}</p>;
+  const { commits: list, moved } = commits.data;
   return (
-    <ul className="plain commits" aria-label={`Commits of run ${run.id}`}>
-      {commits.data.map((commit) => (
-        <li key={commit.sha} className="commit">
-          <span className="mono muted small" title={commit.sha}>
-            commit {short(commit.sha)}
-          </span>
-          <pre className="commit-message">{commit.message}</pre>
-          <CodeBlock label={`Patch of commit ${short(commit.sha)}`} text={commit.patch} diff empty="No changes." />
-        </li>
-      ))}
-    </ul>
+    <div className="stack">
+      {moved && <Notice aria-label="Branch moved">The branch moved after this run: the list shows the branch.</Notice>}
+      {list.length === 0 ? (
+        <p className="muted">{run.status === "running" ? "The run did not stop. Its commits show at its end." : "No commits."}</p>
+      ) : (
+        <ul className="plain commits" aria-label={`Commits of run ${run.id}`}>
+          {list.map((commit) => (
+            <li key={commit.sha} className="commit">
+              <span className="mono muted small" title={commit.sha}>
+                commit {short(commit.sha)}
+              </span>
+              <pre className="commit-message">{commit.message}</pre>
+              <CodeBlock label={`Patch of commit ${short(commit.sha)}`} text={commit.patch} diff empty="No changes." />
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

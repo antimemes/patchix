@@ -13,7 +13,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { AskSchema, CampaignSummarySchema, CONFIRM_ERROR, CampaignViewSchema, CommitSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, SettingsViewSchema, TaskDetailSchema, type Run } from "@patchix/common";
+import { AskSchema, CampaignSummarySchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, RunCommitsSchema, SettingsViewSchema, TaskDetailSchema, type Run } from "@patchix/common";
 import { parseIssueTasks } from "@patchix/fleet";
 import { askDir, checkFile, exists, readAsk, runDir, writeAsk, writeDraft, writePr, writeRun, writeTasks, type Ctx } from "@patchix/fleet";
 import type { Hono } from "hono";
@@ -105,7 +105,7 @@ test("the text files of a run", async () => {
   // The run has the commits `b` and `h`, and the root has no repository.
   assert.match(((await json(`/api/campaigns/t/tasks/foo/runs/${RUN}/commits`)) as { status: number; body: { error: string } }).body.error, /does not have the commit b of the run/);
   await writeRun(ctx, "t", { ...run("bar", "20260101-000009", "failed", null), head: null, finished: "f" });
-  assert.deepEqual(CommitSchema.array().parse((await json("/api/campaigns/t/tasks/bar/runs/20260101-000009/commits")).body), [], "a run without a head");
+  assert.deepEqual(RunCommitsSchema.parse((await json("/api/campaigns/t/tasks/bar/runs/20260101-000009/commits")).body), { commits: [], head: null, moved: false }, "a run without a head");
 });
 
 test("the draft, the lint and the conditions of the pull request", async () => {
@@ -335,7 +335,7 @@ test("the refresh writes the state of the pull request of the branch into the dr
   }
 });
 
-test("a commit of the branch without the Assisted-by line is in commit_problems, and the pull request route refuses it", async () => {
+test("a commit of the branch without the Assisted-by line is in commit_problems, the pull request route refuses it, and the commits of the newest run follow the branch", async () => {
   const work = join(tmp, "work");
   const repo = join(ctx.data, ".cache", "nixpkgs.git");
   const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
@@ -348,7 +348,14 @@ test("a commit of the branch without the Assisted-by line is in commit_problems,
   execFileSync("git", ["clone", "-q", "--bare", work, repo]);
   try {
     const id = "20260101-000020";
+    const older = "20260101-000019";
+    await writeRun(ctx, "t", { ...run("qux", older, "ok", null), base, head: bad, finished: "f" });
     await writeRun(ctx, "t", { ...run("qux", id, "ok", null), base, head: bad, finished: "f" });
+    const commits = async (runId: string) => {
+      const { commits, head, moved } = RunCommitsSchema.parse((await json(`/api/campaigns/t/tasks/qux/runs/${runId}/commits`)).body);
+      return { shas: commits.map((x) => x.sha), head, moved };
+    };
+    assert.deepEqual(await commits(id), { shas: [bad], head: bad, moved: false });
     await writeDraft(ctx, "t", "qux", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
     await writePr(ctx, "t", "qux", { title: "qux: fix", labels: [], run: id, words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
     const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
@@ -362,6 +369,9 @@ test("a commit of the branch without the Assisted-by line is in commit_problems,
     g("commit", "-q", "--amend", "--allow-empty", "-m", "qux: fix", "-m", "Assisted-by: Claude Code (Claude Opus 5.5) with patchix");
     execFileSync("git", ["push", "-q", "-f", repo, "t/qux"], { cwd: work });
     assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body).commit_problems, []);
+    const amended = g("rev-parse", "HEAD");
+    assert.deepEqual(await commits(id), { shas: [amended], head: amended, moved: true }, "the newest run gives the tip of the branch");
+    assert.deepEqual(await commits(older), { shas: [bad], head: bad, moved: false }, "an older run gives its head");
     const started = await json("/api/campaigns/t/tasks/qux/pr", confirm);
     assert.match(PublishErrorSchema.parse(started.body).publish_log ?? "", /^# publish of t\/qux, /);
   } finally {
