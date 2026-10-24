@@ -51,7 +51,7 @@ export const Running: Story = {
 };
 
 export const Mixed: Story = {
-  parameters: { docs: { description: { story: "3. Tasks in each state, with source flags, worktrees, check badges and lint counts." } } },
+  parameters: { docs: { description: { story: "3. Tasks in each state, with source flags, worktrees, check badges, lint counts and the start time of the newest run: some minutes, hours or days ago." } } },
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", "run", 6), job("gajim", "run", 2)] }] }))],
 };
 

@@ -7,12 +7,11 @@ import { TextField } from "../components/Field.tsx";
 import { FilterChips } from "../components/FilterChips.tsx";
 import { Link } from "../components/Link.tsx";
 import { Notice } from "../components/Notice.tsx";
-import { Popover } from "../components/Popover.tsx";
 import { Progress } from "../components/Progress.tsx";
 import { useToast } from "../components/Toast.tsx";
 import { Tooltip } from "../components/Tooltip.tsx";
 import { useClient } from "../client.tsx";
-import { STATES, issueUrl, plural, time } from "../format.ts";
+import { STATES, ago, issueUrl, plural, time } from "../format.ts";
 import { useAction, useDebounced, useLoad, useSignals } from "../hooks.ts";
 import { href, param, replaceParams } from "../router.ts";
 import { JobsStrip, NO_JOBS } from "./JobsStrip.tsx";
@@ -167,12 +166,12 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
                 </th>
                 <th>Attribute</th>
                 <th>Notes</th>
-                <th className="num">Paths</th>
                 {campaign.source !== undefined && <th>Source</th>}
                 <th>State</th>
                 <th>PR</th>
                 <th className="num">Runs</th>
                 <th>Newest run</th>
+                <th>Last run</th>
                 <th>Worktree</th>
                 <th>
                   <span className="sr-only">Actions</span>
@@ -234,26 +233,6 @@ function TaskRow({ campaign, task, selected, onSelect, busy, queued, starting, o
       <td>
         <div className="task-notes">{task.notes}</div>
       </td>
-      <td className="num">
-        {task.paths.length === 0 ? (
-          <span className="muted">0</span>
-        ) : (
-          <Popover
-            title={`Paths of ${task.attr}`}
-            trigger={
-              <Button size="sm" variant="ghost">
-                {task.paths.length}
-              </Button>
-            }
-          >
-            <ul className="paths">
-              {task.paths.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-          </Popover>
-        )}
-      </td>
       {campaign.source !== undefined && (
         <td>
           <SourceFlags task={task} />
@@ -278,6 +257,16 @@ function TaskRow({ campaign, task, selected, onSelect, busy, queued, starting, o
           <span className="muted">—</span>
         ) : (
           <RunBadges run={run} />
+        )}
+      </td>
+      <td className="nowrap">
+        {/* The time since the start of the newest run. The title has the full ISO time. */}
+        {run === undefined ? (
+          <span className="muted">—</span>
+        ) : (
+          <span className="small" title={run.started}>
+            {ago(run.started)}
+          </span>
         )}
       </td>
       <td>
