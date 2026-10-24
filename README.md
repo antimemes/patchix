@@ -2,7 +2,7 @@
 
 ![A tour of the web page: the campaigns, the task list, one task with its diff and checks, and the pull request page](docs/tour.gif)
 
-patchix starts fleets of agents that fix packages in [nixpkgs](https://github.com/NixOS/nixpkgs). It helps maintainers to deploy a fix for a vulnerability at a large scale: one small fix for each of many packages. A tracking issue gives the list of packages. A person can review each fix quickly, and a check gives the signal that the fix is correct.
+patchix runs fleets of agents to patch packages in [nixpkgs](https://github.com/NixOS/nixpkgs). It helps deploy vulnerability fixes at large scale, and works best for deploying a small fix among many packages.
 
 The first campaign is [NixOS/nixpkgs#576541](https://github.com/NixOS/nixpkgs/issues/576541): packages with a bundled CA trust store. The check is [nix-cacert-harness](https://github.com/irgolic/nix-cacert-harness). It examines the trust stores of a package before and after the fix. It also tests the package with the certificate chains of the eMudhra incident.
 
@@ -13,7 +13,7 @@ The first campaign is [NixOS/nixpkgs#576541](https://github.com/NixOS/nixpkgs/is
 
 It's assumed you have an SSH key configured for pushing.
 
-Create a GitHub classic token with the `public_repo` scope and in `~/.local/share/patchix/.env` as `GH_TOKEN=...`.
+Create a GitHub classic token with the `public_repo` scope and put it in `~/.local/share/patchix/.env` as `GH_TOKEN=...`.
 
 ```sh
 $(nix-build https://github.com/antimemes/patchix/archive/main.tar.gz --no-out-link)/bin/patchix
