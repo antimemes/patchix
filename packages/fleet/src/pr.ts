@@ -10,9 +10,10 @@ import { render } from "./render.ts";
 import { addLabels, forkOf, prCreate, prEdit, prList, type ListedPr } from "./github.ts";
 import { branchOf, push, removeWorktree, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
 import { lintText } from "./lint.ts";
-import { CaptureError } from "./proc.ts";
+import { CaptureError, type Log } from "./proc.ts";
 import { parseWords } from "./run.ts";
 import {
+  appendPublishLog,
   checkFile,
   exists,
   fail,
@@ -126,7 +127,9 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
  * that is `merged` or `closed` also give an error.
  *
  * After the conditions, each command and its output go into `publish.log` of the task, also after an error. The file
- * has only the commands of the newest request. An error after the conditions has the text of the log: see `publishLogOf`.
+ * has only the commands of the newest request. It gets each line at the time of the line: thus the page can show the
+ * file while the request operates (see `publishLog`). An error after the conditions has the text of the log: see
+ * `publishLogOf`.
  *
  * `input` shows that the person set the tick box of the page: see `PublishInput`. When the request has no error, the
  * draft gets the time of the request in `confirmed`.
@@ -147,8 +150,7 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     // A person examined an `unverified` run on the page: the tick box of `input` shows it.
     if (!publishable(newest)) fail(409, `the newest run of ${attr} is not ok or unverified`);
 
-    const log = [`# publish of ${c}/${attr}, ${now()}`];
-    const text = () => `${log.join("\n")}\n`;
+    const log = await publishLog(ctx, c, attr, `# publish of ${c}/${attr}, ${now()}`);
     try {
       const done = await publish(ctx, campaign, attr, pr, body, log, confirmed);
       log.push(`# the pull request is #${done.number}${done.url === null ? "" : `: ${done.url}`}`);
@@ -156,11 +158,35 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     } catch (e) {
       // The log has the output of a command with an error. A different error goes into the log as one line.
       if (!(e instanceof CaptureError)) log.push(`error: ${message(e)}`);
-      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { publish_log: text() });
+      throw Object.assign(e instanceof Error ? e : new Error(String(e)), { publish_log: log.text() });
     } finally {
-      await writePublishLog(ctx, c, attr, text());
+      await log.close();
     }
   });
+}
+
+/**
+ * The log of `createOrUpdatePr` in `publish.log`. The first line replaces the file. Each `push` adds its lines to the
+ * end of the file: thus the page can read the file while the request operates. `close` waits for these writes. Then
+ * it writes all the lines again, also when a write gave an error.
+ */
+async function publishLog(ctx: Ctx, c: string, attr: string, first: string) {
+  const lines = [first];
+  const text = () => `${lines.join("\n")}\n`;
+  await writePublishLog(ctx, c, attr, text());
+  let writes = Promise.resolve();
+  return {
+    push(...more: string[]) {
+      lines.push(...more);
+      const added = more.map((line) => `${line}\n`).join("");
+      writes = writes.then(() => appendPublishLog(ctx, c, attr, added)).catch((e: unknown) => console.warn(`publish.log of ${c}/${attr}: ${message(e)}`));
+    },
+    text,
+    async close() {
+      await writes;
+      await writePublishLog(ctx, c, attr, text());
+    },
+  };
 }
 
 /** The text of `publish.log` in an error of `createOrUpdatePr`, or `null` when no command started. */
@@ -173,7 +199,7 @@ export function publishLogOf(e: unknown): string | null {
  * The commands of `createOrUpdatePr`, after its conditions. Each command and its output go into `log`. The draft gets
  * `confirmed` only at the end, when no command gave an error.
  */
-async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, body: string, log: string[], confirmed: string): Promise<Pr & { number: number }> {
+async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, body: string, log: Log, confirmed: string): Promise<Pr & { number: number }> {
   const c = campaign.name;
   const branch = await taskBranch(ctx, campaign, attr);
   // The remote `fork` can have the URL of a previous fork of the settings.

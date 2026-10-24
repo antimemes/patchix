@@ -5,6 +5,14 @@ import type { Writable } from "node:stream";
 
 const KILL_DELAY_MS = 15_000;
 
+/**
+ * The lines of a log for a person. A `string[]` is such a log. A different log can write the lines into a file when
+ * it gets them: see `createOrUpdatePr`.
+ */
+export interface Log {
+  push(...lines: string[]): unknown;
+}
+
 export interface CaptureOptions {
   cwd?: string;
   input?: string;
@@ -12,10 +20,11 @@ export interface CaptureOptions {
   /** The exit codes that are not an error. The default is `[0]`. */
   codes?: readonly number[];
   /**
-   * The lines of a log for a person. `capture` adds the line `$ <command>`, then the `stdout` and the `stderr` in the
-   * sequence that they come. When the exit code is not in `codes`, it adds the line `[exit code N]`.
+   * The log for a person. When the command starts, `capture` adds the line `$ <command>`. When the command stops, it
+   * adds the `stdout` and the `stderr` in the sequence that they came. When the exit code is not in `codes`, it then
+   * adds the line `[exit code N]`.
    */
-  log?: string[] | undefined;
+  log?: Log | undefined;
 }
 
 /** The error of a command that gives a different exit code, or that a signal stopped. It has all the output. */
@@ -48,6 +57,8 @@ export function capture(cmd: string, args: readonly string[], opts: CaptureOptio
     let err = "";
     /** The `stdout` and the `stderr` in the sequence that they come, for the log. */
     let all = "";
+    /** The `error` event occurred: the command did not start. Then the `close` event does not add a line to the log. */
+    let notStarted = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs ?? 10 * 60_000);
     opts.log?.push(`$ ${commandLine(cmd, args)}`);
     child.stdout.on("data", (d: Buffer) => {
@@ -60,11 +71,13 @@ export function capture(cmd: string, args: readonly string[], opts: CaptureOptio
     });
     child.on("error", (e) => {
       clearTimeout(timer);
+      notStarted = true;
       opts.log?.push(`[cannot start ${cmd}: ${e.message}]`);
       fail(new Error(`cannot start ${cmd}: ${e.message}`));
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (notStarted) return;
       if (opts.log !== undefined && all.trim() !== "") opts.log.push(all.replace(/\n$/, ""));
       if (code !== null && (opts.codes ?? [0]).includes(code)) return done(out);
       opts.log?.push(`[${signal === null ? `exit code ${code}` : `stopped by ${signal}`}]`);

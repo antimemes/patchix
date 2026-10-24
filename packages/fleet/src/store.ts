@@ -1,7 +1,7 @@
 /** The files of the campaigns and of their state. See CLAUDE.md for the layout. */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { link, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, link, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
 import {
@@ -452,6 +452,11 @@ export async function readPublishLog(ctx: Ctx, c: string, attr: string): Promise
 
 export async function writePublishLog(ctx: Ctx, c: string, attr: string, text: string): Promise<void> {
   await writeAtomic(publishLogFile(ctx, c, attr), text);
+}
+
+/** Adds the text to the end of `publish.log`. */
+export async function appendPublishLog(ctx: Ctx, c: string, attr: string, text: string): Promise<void> {
+  await appendFile(publishLogFile(ctx, c, attr), text);
 }
 
 /**

@@ -34,6 +34,8 @@ function seed(t: () => TaskView, extra: Omit<Partial<MockCampaign>, "tasks"> = {
 
 /** The tick box above the pull request button. The person sets it before the click. */
 const CONFIRM = /^I established confidence in this output/;
+/** The mock request of the pull request button operates for approximately 2 seconds. */
+const PR_REQUEST = { timeout: 5000 };
 
 /** The page reads its tab from the URL hash when it starts. */
 const openTab = (tab: PageTab) => () => {
@@ -224,8 +226,34 @@ export const PublishCreated: Story = {
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
     await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
+    await canvas.findByText(/^Confidence confirmed /, undefined, PR_REQUEST);
     await canvas.findByLabelText("Output of the publish");
-    await canvas.findByText(/^Confidence confirmed /);
+  },
+};
+
+export const Publishing: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Publish tab: the request of Create pull request operates. The Output opens empty at the click. Each second, the page reads publish.log and shows the commands that started. At the end, the log of the response replaces it.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+      drafts: { [A]: description(A) },
+      publishLogs: { [A]: failedPublishLog(A) },
+    }),
+  ],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
+    await canvas.findByText("Loading…");
+    // The first read gives a part of the log, before the response.
+    await canvas.findByText(/\$ git push fork/, undefined, PR_REQUEST);
+    await canvas.findByRole("button", { name: "Create pull request", busy: true });
+    await canvas.findByText(/# the pull request is #580201/, undefined, PR_REQUEST);
   },
 };
 
@@ -256,7 +284,7 @@ export const PublishFailed: Story = {
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
     await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
-    await canvas.findByLabelText("Output of the publish");
+    await canvas.findByText(/\[exit code 1\]/, undefined, PR_REQUEST);
   },
 };
 

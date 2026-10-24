@@ -125,6 +125,7 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: false })), unconfirmed);
   assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: "true" })), unconfirmed);
   assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).publish_log, null);
+  assert.equal((await json("/api/campaigns/t/tasks/foo/publish-log")).status, 404, "no publish.log");
 
   // The conditions agree, thus `createOrUpdatePr` starts `git push`. It cannot start: the root has no repository.
   const failed = await json("/api/campaigns/t/tasks/foo/pr", confirm);
@@ -133,6 +134,7 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.match(error.publish_log ?? "", /^# publish of t\/foo, [^\n]+\n\$ git push fork t\/foo\n\[cannot start git: [^\n]+\]\nerror: cannot start git: [^\n]+\n$/);
   const logged = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
   assert.equal(logged.publish_log, error.publish_log, "publish.log");
+  assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), error.publish_log, "the route of publish.log");
   assert.equal(logged.task.pr_meta?.confirmed, null, "a publish with an error does not record the confirmation");
 
   // A newest run that is `unverified` also starts `git push`: the person examined it. A newest run that is `failed` does not.

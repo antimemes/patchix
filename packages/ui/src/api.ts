@@ -63,6 +63,8 @@ export interface Client {
   draftFromRun(c: string, attr: string, input: DraftFromRun): Promise<TaskDetail>;
   /** `input` shows that the person set the tick box: see `PublishInput`. */
   createPr(c: string, attr: string, input: PublishInput): Promise<TaskDetail>;
+  /** `publish.log` of the task. While `createPr` operates, the file becomes longer. A task without the file gives an error with the status 404. */
+  publishLog(c: string, attr: string): Promise<string>;
   makeWorktree(c: string, attr: string): Promise<Worktree>;
   removeWorktree(c: string, attr: string): Promise<TaskDetail>;
   /** The settings of this person and this host: see `SettingsView`. */
@@ -139,6 +141,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     saveDraft: (c, attr, input) => json("PUT", `${task(c, attr)}/draft`, input),
     draftFromRun: (c, attr, input) => json("POST", `${task(c, attr)}/draft`, input),
     createPr: (c, attr, input) => json("POST", `${task(c, attr)}/pr`, input),
+    publishLog: (c, attr) => text(`${task(c, attr)}/publish-log`),
     makeWorktree: (c, attr) => json("POST", `${task(c, attr)}/worktree`),
     removeWorktree: (c, attr) => json("DELETE", `${task(c, attr)}/worktree`),
     settings: () => json("GET", "/api/settings"),

@@ -262,6 +262,12 @@ export function app(ctx: fleet.Ctx): Hono {
     }
     return c.json(await detail(ctx, p(c).c, p(c).attr));
   });
+  // The page reads the file again and again while `POST .../pr` operates.
+  api.get("/api/campaigns/:c/tasks/:attr/publish-log", async (c) => {
+    const log = await fleet.readPublishLog(ctx, p(c).c, p(c).attr);
+    if (log === null) fail(404, `the task ${p(c).attr} has no publish.log`);
+    return c.text(log);
+  });
 
   api.post("/api/campaigns/:c/tasks/:attr/worktree", async (c) => {
     const campaign = await fleet.readCampaign(ctx, p(c).c);

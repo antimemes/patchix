@@ -31,6 +31,7 @@ import {
   runDir,
   runSource,
   startRun,
+  taskDir,
   taskViews,
   updateBase,
   worktreePath,
@@ -238,12 +239,14 @@ test("the publish writes each command and its output into publish.log, also when
   const fork = join(tmp, "gh", "someone", "nixpkgs");
   const pull = '{"html_url":"https://github.com/NixOS/nixpkgs/pull/42","number":42,"state":"open"}';
   const gh = join(tmp, "gh.sh");
+  // `gh` keeps a copy of `publish.log` at the time that it makes the pull request.
+  const seen = join(tmp, "seen.log");
   await writeFile(
     gh,
     `#!/bin/sh
 case "$*" in
 */labels*) echo "1.severity: security";;
-*"POST repos/NixOS/nixpkgs/pulls "*) echo '${pull}'; echo "a warning of gh" >&2;;
+*"POST repos/NixOS/nixpkgs/pulls "*) cp '${join(taskDir(ctx, "t", "foo"), "publish.log")}' '${seen}'; echo '${pull}'; echo "a warning of gh" >&2;;
 *"PATCH repos/NixOS/nixpkgs/pulls/42 "*) echo '${pull}';;
 *) echo "unknown: $*" >&2; exit 1;;
 esac
@@ -289,6 +292,8 @@ esac
     assert.match(log, /\nTo file:\/\/[^\n]*\/someone\/nixpkgs\n \+ [0-9a-f]+\.\.\.[0-9a-f]+ +t\/foo -> t\/foo \(forced update\)\n/, "the output of git push");
     assert.ok(log.includes(`\n${pull}\na warning of gh\n`), "the stdout and the stderr of gh");
     assert.ok(log.endsWith("\n# the pull request is #42: https://github.com/NixOS/nixpkgs/pull/42\n"), log);
+    const early = await readFile(seen, "utf8");
+    assert.ok(log.startsWith(early) && early.includes("\n$ git worktree remove "), `publish.log gets each command while the request operates: ${early}`);
     assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), pr.pushed);
     assert.equal(await exists(worktreePath(ctx, campaign, "foo")), false, "the worktree is removed");
   } finally {

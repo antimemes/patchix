@@ -48,6 +48,10 @@
  *   `publish.log` of the task. Each request writes the file again. The `TaskDetail` has the file in `publish_log`.
  *   Each error of this route is a `PublishError`: its `publish_log` is the log of this request, or `null` when no
  *   command started.
+ * - `GET /api/campaigns/:c/tasks/:attr/publish-log` gives `publish.log` of the task as text, or 404 when the file is
+ *   not there. After the conditions of `POST .../pr`, the first line of the request replaces the file. Then the file
+ *   gets each command when it starts, and its output when it stops. Thus the page reads this route each second while
+ *   `POST .../pr` operates. Until the request examined the conditions, the file has the log of the previous request.
  * - `POST /api/campaigns/:c/tasks/:attr/worktree` makes the worktree of the task for a person and gives `Worktree`.
  *   `DELETE` removes it and gives `TaskDetail`. A worktree with changes that are not committed is not removed.
  * - `POST /api/campaigns/:c/base` gets the newest commit of the base branch into the repository of patchix (one fetch

@@ -1,7 +1,7 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
 import { publishable } from "@patchix/common/status";
-import type { Ask, Campaign, CampaignSummary, CampaignView, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView} from "@patchix/common";
+import type { Ask, Campaign, CampaignSummary, CampaignView, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
 import * as f from "./fixtures.ts";
@@ -34,6 +34,10 @@ export interface MockOptions {
   /** The time before the mock fleet starts the runs of the queue. The default is 1.5 seconds. */
   fleetDelay?: number;
 }
+
+/** The time between two steps of the log of `createPr`. The log has 6 steps: the request operates for approximately 2 seconds. */
+const LOG_STEP_MS = 350;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface State {
   campaign: Campaign;
@@ -250,29 +254,42 @@ export function mockClient(options: MockOptions): Client {
         changed(s, attr);
         return detail(s, attr);
       }),
-    createPr: (c, attr, input) =>
-      answer("createPr", () => {
-        // As the server: see `CONFIRM_ERROR` in `packages/common/src/api.ts`.
-        if (input.confirmed !== true) fail(409, "confirm that you established confidence in this output");
-        const s = state(c);
-        const t = taskOf(s, attr);
-        const meta = t.pr_meta ?? fail(400, `the task ${attr} has no draft`);
-        if (meta.number !== null && meta.state !== "open") fail(409, `the pull request #${meta.number} is ${meta.state}`);
-        const job = s.jobs.find((j) => j.attr === attr);
-        if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
-        const findings = f.fakeLint(s.drafts.get(attr) ?? "").findings.length;
-        if (findings > 0) fail(409, `the draft has ${findings} memelint findings`);
-        const run = t.runs[0];
-        if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
-        const now = new Date().toISOString();
-        const number = meta.number ?? 580201;
-        t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: run?.head ?? null, confirmed: now };
-        s.publishLogs.set(attr, f.publishLog(attr, number));
-        t.state = "pr";
-        t.worktree = null;
+    // As the server: the log becomes longer in steps, and the request gives its result after the last step. See `createOrUpdatePr`.
+    createPr: async (c, attr, input) => {
+      if (options.hang) return new Promise<TaskDetail>(() => undefined);
+      await sleep(options.delay ?? 150);
+      const failure = options.fail?.createPr;
+      const failed = failure === undefined ? null : new ApiError(failure[0], failure[1], { error: failure[1], ...failure[2] });
+      const failedLog = failure?.[2]?.["publish_log"];
+      // An error without a log occurs before the first command.
+      if (failed !== null && typeof failedLog !== "string") throw failed;
+      // As the server: see `CONFIRM_ERROR` in `packages/common/src/api.ts`.
+      if (input.confirmed !== true) fail(409, "confirm that you established confidence in this output");
+      const s = state(c);
+      const t = taskOf(s, attr);
+      const meta = t.pr_meta ?? fail(400, `the task ${attr} has no draft`);
+      if (meta.number !== null && meta.state !== "open") fail(409, `the pull request #${meta.number} is ${meta.state}`);
+      const job = s.jobs.find((j) => j.attr === attr);
+      if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
+      const findings = f.fakeLint(s.drafts.get(attr) ?? "").findings.length;
+      if (findings > 0) fail(409, `the draft has ${findings} memelint findings`);
+      const run = t.runs[0];
+      if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
+      const number = meta.number ?? 580201;
+      for (const step of f.logSteps(typeof failedLog === "string" ? failedLog : f.publishLog(attr, number))) {
+        s.publishLogs.set(attr, step);
         changed(s, attr);
-        return detail(s, attr);
-      }),
+        await sleep(LOG_STEP_MS);
+      }
+      if (failed !== null) throw failed;
+      const now = new Date().toISOString();
+      t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: run?.head ?? null, confirmed: now };
+      t.state = "pr";
+      t.worktree = null;
+      changed(s, attr);
+      return structuredClone(detail(s, attr));
+    },
+    publishLog: (c, attr) => answer("publishLog", () => state(c).publishLogs.get(attr) ?? fail(404, `the task ${attr} has no publish.log`)),
     makeWorktree: (c, attr) =>
       answer("makeWorktree", () => {
         const s = state(c);

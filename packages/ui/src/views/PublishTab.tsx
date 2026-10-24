@@ -29,6 +29,28 @@ function publishLogOf(error: unknown): string | null {
   return typeof body === "object" && body !== null && "publish_log" in body && typeof body.publish_log === "string" ? body.publish_log : null;
 }
 
+/** The time between two reads of `publish.log` while the request of the button operates. */
+const POLL_MS = 1000;
+const sleep = (ms: number) => new Promise<false>((resolve) => window.setTimeout(() => resolve(false), ms));
+
+/** The output of the newest click on the pull request button. */
+interface Attempt {
+  /** `publish.log` of the task at the time of the click: the log of a previous request. */
+  before: string | null;
+  /** The log of the click. It is `null` until the first command starts, and when no command started. */
+  log: string | null;
+}
+
+/**
+ * The text below the button. After a click, it is the log of the click. When the request stopped, `publish.log` of
+ * the task replaces it. But the previous log and a part of the log of the click do not replace it.
+ */
+function shownOutput(file: string | null, attempt: Attempt | null, pending: boolean): string | null {
+  if (attempt === null) return file;
+  const old = file === attempt.before || (file !== null && attempt.log?.startsWith(file) === true);
+  return pending || old ? attempt.log : file;
+}
+
 export interface PrState {
   hasDraft: boolean;
   draftDirty: boolean;
@@ -88,10 +110,8 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   // The server lints the draft when it writes the draft and when it gives the task.
   const findings = detail.lint?.findings ?? null;
 
-  // After an error, the page shows the log of the error until the server gives a different `publish.log`.
-  const [failed, setFailed] = useState<{ log: string; before: string | null } | null>(null);
-  const output = failed !== null && failed.before === detail.publish_log ? failed.log : detail.publish_log;
-  /** The number of clicks on the button that gave a log. After each click, the output opens. */
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  /** The number of clicks on the button. After each click, the output opens. */
   const [attempts, setAttempts] = useState(0);
   /** The tick box above the button. It is clear when the page opens, and again after each click of the button that gave no error. */
   const [confirmed, setConfirmed] = useState(false);
@@ -109,22 +129,31 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const publish = useAction(async () => {
     const updating = meta?.number != null;
     const before = detail.publish_log;
-    setFailed(null);
+    setAttempt({ before, log: null });
+    setAttempts((n) => n + 1);
+    const request = client.createPr(c, attr, { confirmed: true });
+    const stopped = request.then(
+      () => true,
+      () => true,
+    );
+    // While the request operates, the page reads `publish.log` each second. Until the request examined its
+    // conditions, the file has the log of a previous request.
+    while (!(await Promise.race([stopped, sleep(POLL_MS)]))) {
+      const log = await client.publishLog(c, attr).catch(() => null);
+      if (log !== null && log !== before) setAttempt({ before, log });
+    }
     try {
-      const next = await client.createPr(c, attr, { confirmed: true });
+      const next = await request;
+      setAttempt({ before, log: next.publish_log });
       onDetail(next);
       setConfirmed(false);
-      if (next.publish_log !== null) setAttempts((n) => n + 1);
       toast(updating ? "Pull request updated" : "Pull request created");
     } catch (error) {
-      const log = publishLogOf(error);
-      if (log !== null) {
-        setFailed({ log, before });
-        setAttempts((n) => n + 1);
-      }
+      setAttempt({ before, log: publishLogOf(error) });
       throw error;
     }
   });
+  const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
   const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, findings: findings?.length ?? null, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed });
 
@@ -268,9 +297,9 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
               </ul>
             )}
             {publish.error !== null && <Notice tone="error">{publish.error}</Notice>}
-            {output !== null && (
+            {(output !== null || attempt !== null) && (
               <Disclosure key={attempts} label="Output" defaultOpen={attempts > 0}>
-                <CodeBlock label="Output of the publish" wrap text={output} maxHeight="24rem" />
+                <CodeBlock label="Output of the publish" wrap follow text={output} loading={publish.pending} empty="No command started." maxHeight="24rem" />
               </Disclosure>
             )}
           </section>

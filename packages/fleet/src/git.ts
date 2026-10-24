@@ -14,7 +14,7 @@ import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Campaign, Commit, Task } from "@patchix/common";
 import { forkOf } from "./github.ts";
-import { capture, type CaptureOptions } from "./proc.ts";
+import { capture, type CaptureOptions, type Log } from "./proc.ts";
 import { exists, fail, readRun, readTasks, type Ctx } from "./store.ts";
 
 const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote"]);
@@ -179,7 +179,7 @@ export async function baseWorktree(ctx: Ctx, campaign: Campaign): Promise<string
 }
 
 /** Removes the worktree. The branch stays. When the worktree has changes that are not committed, `git` gives an error. */
-export async function removeWorktree(ctx: Ctx, path: string, log?: string[]): Promise<void> {
+export async function removeWorktree(ctx: Ctx, path: string, log?: Log): Promise<void> {
   await git(repoPath(ctx), ["worktree", "remove", path], { log });
 }
 
@@ -245,7 +245,7 @@ export async function runCommits(ctx: Ctx, c: string, attr: string, id: string):
  * push can replace the branch of the fork, but only when the fork has that commit. When it is `null`, the push must
  * add commits to the branch of the fork. The output of `git` goes into `log`.
  */
-export async function push(ctx: Ctx, branch: string, expected: string | null = null, log?: string[]): Promise<void> {
+export async function push(ctx: Ctx, branch: string, expected: string | null = null, log?: Log): Promise<void> {
   const lease = expected === null ? [] : [`--force-with-lease=${branch}:${expected}`];
   await git(repoPath(ctx), ["push", ...lease, "fork", branch], { log });
 }

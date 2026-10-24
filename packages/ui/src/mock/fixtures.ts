@@ -317,6 +317,12 @@ export function publishLog(attr: string, number: number, minutesAgo = 0): string
   ].join("\n");
 }
 
+/** The texts of `publish.log` while a request operates: first only the first line, then the log after each command. */
+export function logSteps(log: string): string[] {
+  const parts = log.split(/(?=^\$ )/m);
+  return parts.map((_, i) => parts.slice(0, i + 1).join(""));
+}
+
 /** `publish.log` when GitHub does not accept the new pull request. */
 export function failedPublishLog(attr: string): string {
   return [

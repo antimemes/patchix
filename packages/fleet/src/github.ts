@@ -1,13 +1,13 @@
 /** The GitHub operations, with `gh`. `gh` gets the token from `GH_TOKEN`. `PATCHIX_GH_BIN` gives a different command. */
 import { z } from "zod";
 import { GITHUB_LOGIN, LabelSchema, type Label } from "@patchix/common";
-import { capture } from "./proc.ts";
+import { capture, type Log } from "./proc.ts";
 import { message, readSettings, type Ctx } from "./store.ts";
 
 const ghBin = () => process.env["PATCHIX_GH_BIN"] || "gh";
 
 /** Starts `gh`. With `log`, the command and its output go into the log for a person (see `CaptureOptions`). */
-const gh = (args: readonly string[], log?: string[]) => capture(ghBin(), args, { timeoutMs: 2 * 60_000, log });
+const gh = (args: readonly string[], log?: Log) => capture(ghBin(), args, { timeoutMs: 2 * 60_000, log });
 
 /** The time that a process keeps the login of `gh api user`. */
 const LOGIN_MS = 60 * 60_000;
@@ -39,7 +39,7 @@ export async function forkOf(ctx: Ctx): Promise<string> {
   }
 }
 
-async function api<T>(schema: z.ZodType<T>, args: readonly string[], log?: string[]): Promise<T> {
+async function api<T>(schema: z.ZodType<T>, args: readonly string[], log?: Log): Promise<T> {
   return schema.parse(JSON.parse(await gh(["api", ...args], log)));
 }
 
@@ -52,19 +52,19 @@ const PullSchema = z.object({ number: z.number().int(), html_url: z.string(), st
 const PULL_FIELDS = ["--jq", "{number, html_url, state}"];
 
 /** Makes the pull request. `head` is `<fork>:<branch>`. The body comes from the file. */
-export async function prCreate(repo: string, base: string, head: string, title: string, bodyFile: string, log?: string[]): Promise<{ number: number; url: string }> {
+export async function prCreate(repo: string, base: string, head: string, title: string, bodyFile: string, log?: Log): Promise<{ number: number; url: string }> {
   const args = ["-X", "POST", `repos/${repo}/pulls`, "-f", `base=${base}`, "-f", `head=${head}`, "-f", `title=${title}`, "-F", `body=@${bodyFile}`, ...PULL_FIELDS];
   const pr = await api(PullSchema, args, log);
   return { number: pr.number, url: pr.html_url };
 }
 
 /** Writes the title and the body of the pull request again. */
-export async function prEdit(repo: string, number: number, title: string, bodyFile: string, log?: string[]): Promise<void> {
+export async function prEdit(repo: string, number: number, title: string, bodyFile: string, log?: Log): Promise<void> {
   await api(PullSchema, ["-X", "PATCH", `repos/${repo}/pulls/${number}`, "-f", `title=${title}`, "-F", `body=@${bodyFile}`, ...PULL_FIELDS], log);
 }
 
 /** Adds the labels. The labels that the pull request has stay. The output is the name of each label of the pull request. */
-export async function addLabels(repo: string, number: number, labels: readonly string[], log?: string[]): Promise<void> {
+export async function addLabels(repo: string, number: number, labels: readonly string[], log?: Log): Promise<void> {
   if (labels.length === 0) return;
   await gh(["api", "-X", "POST", `repos/${repo}/issues/${number}/labels`, ...labels.flatMap((l) => ["-f", `labels[]=${l}`]), "--jq", ".[].name"], log);
 }
