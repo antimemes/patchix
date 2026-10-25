@@ -21,4 +21,10 @@ checks:
     command: brotli-check {attr} --base {base}
     pass: "^VERDICT {attr}: (FIXED|MARKED INSECURE)$"
     reviewer: nix run github:antimemes/patchix#brotli-check -- {attr} --pr {pr}
+    # `--onto <ref>` tests the change on a different branch, for example `staging` when `staging` has the fixed
+    # `brotli` and `master` does not have it. The mark `{{check:scanner --onto staging}}` of a description adds the
+    # flag to the `reviewer` command. The output in the description stays the output of `command`, on `master`.
+    flags:
+      - name: --onto
+        value: true
     timeout_minutes: 120

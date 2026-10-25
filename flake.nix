@@ -42,7 +42,7 @@
         brotli-check = {
           type = "app";
           program = pkgs.lib.getExe self.packages.${system}.brotli-check;
-          meta.description = "The check of the brotli campaign: brotli-check <attr> --pr <number>";
+          meta.description = "The check of the brotli campaign: brotli-check <attr> --pr <number> [--onto <ref>]";
         };
       });
 
