@@ -2,8 +2,12 @@
 //
 // Use: `node docs/tour.mjs <base URL> [output directory] [--light]`. Without an output directory, the script writes the
 // file into the directory of the script. The page shows its `dark` colors; `--light` gives the `light` colors.
-// For example:
-//   `nix-shell -p nodejs chromium ffmpeg dejavu_fonts --run 'node docs/tour.mjs http://127.0.0.1:8788/'`
+// The fonts of the video come from `docs/fonts.conf`: `Inter` for the text and `JetBrains Mono` for the code. Write
+// the `share/fonts` directories of `inter` and `jetbrains-mono` into it, then set `FONTCONFIG_FILE`:
+//   `I=$(nix-build '<nixpkgs>' -A inter --no-out-link)/share/fonts`
+//   `J=$(nix-build '<nixpkgs>' -A jetbrains-mono --no-out-link)/share/fonts`
+//   `sed "s|INTER_DIR|$I|; s|JETBRAINS_MONO_DIR|$J|" docs/fonts.conf > /tmp/patchix-fonts.conf`
+//   `nix-shell -p nodejs chromium ffmpeg --run 'FONTCONFIG_FILE=/tmp/patchix-fonts.conf node docs/tour.mjs http://127.0.0.1:8788/'`
 // The variables `CHROMIUM` and `FFMPEG` give different commands.
 //
 // RULE: the server shows live data. The tour must not change the data.
@@ -35,6 +39,8 @@ const base = baseArg.replace(/\/+$/, "");
 const outDir = resolve(outArg ?? dirname(fileURLToPath(import.meta.url)));
 const WIDTH = 1280;
 const HEIGHT = 800;
+// The page uses this `deviceScaleFactor`: the text is sharp. The video has 1.5 times the dimensions of the page.
+const SCALE = 2;
 const FPS = 30;
 // The task of step 2, when its state is `ready`. If not, step 2 shows the first task with the state `ready`.
 const PREFERRED_TASK = "pgsql-tools";
@@ -102,7 +108,7 @@ try {
   };
 
   await send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
-  await send("Emulation.setDeviceMetricsOverride", { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+  await send("Emulation.setDeviceMetricsOverride", { width: WIDTH, height: HEIGHT, deviceScaleFactor: SCALE, mobile: false });
   await send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: light ? "light" : "dark" }, { name: "prefers-reduced-motion", value: "no-preference" }] });
   await send("Page.enable");
   await send("Page.addScriptToEvaluateOnNewDocument", { source: `(${pageHelpers.toString()})()` });
@@ -195,7 +201,7 @@ try {
   await found(`document.querySelector(".jobs-strip .job")`, 3000);
   await sleep(800);
 
-  await send("Page.startScreencast", { format: "png", maxWidth: WIDTH, maxHeight: HEIGHT, everyNthFrame: 1 });
+  await send("Page.startScreencast", { format: "png", maxWidth: WIDTH * SCALE, maxHeight: HEIGHT * SCALE, everyNthFrame: 1 });
   while (latest === null) await sleep(20);
   const start = Date.now();
   let written = 0;
@@ -229,37 +235,27 @@ try {
     // output of the check. The tabs of the run stay below the header of the page.
     const files = `document.querySelector('[role="tablist"][aria-label^="Files of run"]')`;
     await waitFor(`${tabEl("Full diff")} && __tour.textNode("diff --git")`);
-    await hover(`document.querySelector('[aria-label="Issue entry"]')`, 600);
-    await sleep(1400);
+    await sleep(500);
     // The full diff (5 s). When the page cannot show all of the diff, the diff moves down to the `postInstall`
     // lines of `pgsql-tools`, or to its end.
-    await scroll("null", { top: `__tour.top(${files}) - 64` }, 1000);
+    await scroll("null", { top: `__tour.top(${files}) - 200` }, 800);
     const diffBox = `__tour.scroller(__tour.textNode("diff --git"))`;
     if (await js(`!!${diffBox}`)) {
       const to = (await js(`!!__tour.textNode("postInstall", ${diffBox})`)) ? { text: "postInstall", offset: 260 } : { top: `${diffBox}.scrollHeight` };
       await scroll(diffBox, to, 1300);
     }
-    await sleep(4000);
+    await sleep(2000);
 
-    // `Commits` (3 s): the message of each commit, with its last line, for example `Assisted-by:`.
-    await click(tabEl("Commits"), 450);
-    const message = `document.querySelector(".commit-message")`;
-    if (await found(message, 4000)) {
-      const below = `__tour.top(${message}) + ${message}.offsetHeight - scrollY - ${HEIGHT - 60}`;
-      if ((await js(below)) > 0) await scroll("null", { top: `scrollY + ${below}` }, 600);
-    }
-    await sleep(3000);
-
-    // `Checks` (4 s): the output of the check moves down to the `VERDICT` lines.
+    // `Checks` (3 s): the output of the check moves down to the `VERDICT` lines.
     await click(tabEl("Checks", true), 450);
     await scroll("null", { top: `__tour.top(${files}) - 64` }, 400);
     if (await found(`__tour.textNode("VERDICT")`, 6000)) {
       const out = `__tour.scroller(__tour.textNode("VERDICT"))`;
-      if (await js(`!!${out}`)) await scroll(out, { text: "VERDICT", offset: 90 }, 1300);
+      if (await js(`!!${out}`)) await scroll(out, { text: "VERDICT", offset: 90 }, 900);
     } else {
       console.error("The output of the check has no `VERDICT` line.");
     }
-    await sleep(3000);
+    await sleep(1500);
 
     // 3. The `Publish` tab (16 s): the draft and the `Preview` with the AI disclosure and the output of the check.
     // Then the labels and the button that makes the pull request. The tour stops on that button.
@@ -302,7 +298,7 @@ try {
     const r = spawnSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", ...args], { stdio: "inherit" });
     if (r.status !== 0) throw new Error(`ffmpeg stopped with exit code ${r.status}`);
   };
-  run(["-framerate", String(FPS), "-i", join(frames, "f%05d.png"), "-c:v", "libx264", "-preset", "slow", "-crf", "24", "-tune", "animation", "-pix_fmt", "yuv420p", "-movflags", "+faststart", join(outDir, "tour.mp4")]);
+  run(["-framerate", String(FPS), "-i", join(frames, "f%05d.png"), "-c:v", "libx264", "-preset", "slow", "-crf", "24", "-tune", "animation", "-vf", `scale=${WIDTH * 1.5}:-2:flags=lanczos`, "-pix_fmt", "yuv420p", "-movflags", "+faststart", join(outDir, "tour.mp4")]);
   console.log(`wrote ${join(outDir, "tour.mp4")}`);
 } finally {
   ws?.close();

@@ -18,7 +18,7 @@ words = [
 paths = ["AGENTS.md", "campaigns/", "docs/"]
 check = true
 words = [
-  "hierarchies", "documents", "yourself", "small fix", "things", "what", "format", "formats", "specification", "comment", "comments",
+  "hierarchies", "documents", "yourself", "small fix", "things", "what", "format", "formats", "specification", "comment", "comments", "font", "fonts",
   "specifications", "product", "products", "fleet", "fleets", "incident",
   "agent", "agents", "fleet", "fleets", "campaign", "campaigns", "task", "tasks", "run", "runs", "job", "jobs",
   "runner", "worktree", "worktrees", "checkout", "branch", "branches", "fork", "upstream", "commit", "commits", "diff",
