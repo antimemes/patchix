@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEventHandler, ReactNode } from "react";
 import { Field } from "@base-ui/react/field";
 import { Input } from "@base-ui/react/input";
 import { cx } from "../format.ts";
@@ -40,9 +40,11 @@ export interface TextAreaProps extends FieldParts {
   placeholder?: string | undefined;
   disabled?: boolean | undefined;
   mono?: boolean | undefined;
+  /** The key handler of the text area, for example for `Cmd+Enter`. */
+  onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
 }
 
-export function TextArea({ label, hideLabel, description, error, className, value, onValueChange, rows = 4, maxLength, placeholder, disabled, mono }: TextAreaProps) {
+export function TextArea({ label, hideLabel, description, error, className, value, onValueChange, rows = 4, maxLength, placeholder, disabled, mono, onKeyDown }: TextAreaProps) {
   const over = maxLength !== undefined && value.length > maxLength;
   return (
     <Field.Root invalid={Boolean(error) || over} disabled={disabled} className={cx("ui-field", className)}>
@@ -55,7 +57,7 @@ export function TextArea({ label, hideLabel, description, error, className, valu
         )}
       </div>
       <Field.Control
-        render={<textarea rows={rows} />}
+        render={<textarea rows={rows} onKeyDown={onKeyDown} />}
         value={value}
         onValueChange={onValueChange}
         placeholder={placeholder}

@@ -215,7 +215,22 @@ function RunRow({ campaign, attr, job, place, onJobs }: RunRowProps) {
     job !== null ? "A job of this task operates." : place >= 0 ? "The task is in the queue." : question.length > MAX_QUESTION ? `The question has more than ${MAX_QUESTION} characters.` : null;
   return (
     <div className="stack" aria-label="Next run">
-      <TextArea label="Question" hideLabel rows={3} maxLength={MAX_QUESTION} value={question} onValueChange={setQuestion} placeholder="A question for the agent (optional)" />
+      <TextArea
+        label="Question"
+        hideLabel
+        rows={3}
+        maxLength={MAX_QUESTION}
+        value={question}
+        onValueChange={setQuestion}
+        placeholder="A question for the agent (optional)"
+        // `Cmd+Enter` (or `Ctrl+Enter`) starts the run, the same as the button.
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && reason === null && !start.pending) {
+            e.preventDefault();
+            void start.run();
+          }
+        }}
+      />
       <div className="row">
         <Button variant="primary" disabled={reason !== null} pending={start.pending} onClick={() => void start.run()}>
           Run
