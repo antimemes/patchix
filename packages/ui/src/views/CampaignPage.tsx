@@ -284,7 +284,7 @@ function TaskRow({ campaign, task, selected, onSelect, busy, queued, starting, o
           )}
         </div>
       </td>
-      <td>
+      <td className="pr-cell">
         <PrCell task={task} repo={campaign.issue.repo} />
       </td>
       <td className="num">{task.runs.length}</td>

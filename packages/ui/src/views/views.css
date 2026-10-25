@@ -32,12 +32,32 @@
   align-items: baseline;
   gap: 4px 12px;
 }
+/* The `notes` go on more lines. Their width is 16rem or less. */
 .task-notes {
   min-width: 12em;
-  max-width: 28em;
+  max-width: 16rem;
   color: var(--fg-muted);
   font-size: 12px;
   white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The pull request number and the remark stay on one line. */
+.table td.pr-cell .row {
+  flex-wrap: nowrap;
+}
+/*
+ * The remark is 22rem wide or less. The minimum of `grid-template-columns` is 0: thus the remark does not make the table wider than the page.
+ * The table gives the remark the width that the other columns do not use, and cuts the remark. The title of the remark has the full text.
+ */
+.table td.pr-cell .pr-remark {
+  display: inline-grid;
+  grid-template-columns: minmax(0, max-content);
+  max-width: 22rem;
+  vertical-align: bottom;
+}
+.table td.pr-cell .pr-remark > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .task-checks {
   display: inline-flex;

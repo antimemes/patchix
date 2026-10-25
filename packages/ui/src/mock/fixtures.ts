@@ -494,6 +494,14 @@ export function mixedTasks(): TaskView[] {
       pr_meta: prMeta("python3Packages.raven", idAt(2500), { number: 577134, url: "https://github.com/NixOS/nixpkgs/pull/577134", created: at(2400), pushed: HEAD, updated: at(2400), state: "closed", confirmed: at(2400) }),
     }),
     task("electrum", { state: "todo", in_source: false, remark: "no change needed: the bundle is a test fixture" }),
+    // A long remark and long `notes`. The table cuts the remark, and the `notes` go on more lines.
+    task("grpc", {
+      pr: 579021,
+      remark: "no change needed: the C core reads `/etc/ssl/certs/ca-certificates.crt` and never this file",
+      notes: "stale bundle in `etc/roots.pem`, no ECC G3 · trusts AAA · the Python and the Ruby bindings install a copy of the same bundle",
+      state: "external",
+      paths: ["/share/grpc/roots.pem"],
+    }),
     task("gajim", { state: "running", runs: [runningRun("gajim", 2), okRun("gajim", 600)] }),
     task("rubyPackages.excon", {
       state: "ready",

@@ -20,12 +20,21 @@ export function PrCell({ task, repo }: { task: TaskView; repo: string }) {
     return (
       <span className="row">
         <Link href={pullUrl(repo, task.pr)}>#{task.pr}</Link>
-        {task.remark !== null && <span className="muted small">{task.remark}</span>}
+        {task.remark !== null && <Remark text={task.remark} />}
       </span>
     );
   }
-  if (task.remark !== null) return <span className="muted small">{task.remark}</span>;
+  if (task.remark !== null) return <Remark text={task.remark} />;
   return <span className="muted">—</span>;
+}
+
+/** The remark of the issue entry. The task table cuts a long remark. The title has the full text. */
+function Remark({ text }: { text: string }) {
+  return (
+    <span className="pr-remark" title={text}>
+      <span className="muted small">{text}</span>
+    </span>
+  );
 }
 
 export function RunBadges({ run, status = true }: { run: Run; status?: boolean }) {
