@@ -21,6 +21,11 @@ export interface MockCampaign {
   publishLogs?: Record<string, string>;
   /** The commits of the branch of each task with a problem. See `TaskDetail.commit_problems`. */
   commitProblems?: Record<string, CommitProblems[]>;
+  /**
+   * The tasks with a different commit on the branch of the fork, for example an imported branch that a person changed.
+   * The fork rejects a push without `force`. See `PublishInput.force`.
+   */
+  rejected?: string[];
   /** The labels of the issue repository. The default is `LABELS`. */
   labels?: Label[];
 }
@@ -52,6 +57,7 @@ interface State {
   drafts: Map<string, string>;
   publishLogs: Map<string, string>;
   commitProblems: Map<string, CommitProblems[]>;
+  rejected: Set<string>;
   labels: Label[];
 }
 
@@ -71,6 +77,7 @@ export function mockClient(options: MockOptions): Client {
       drafts,
       publishLogs: new Map(Object.entries(m.publishLogs ?? {})),
       commitProblems: new Map(Object.entries(m.commitProblems ?? {})),
+      rejected: new Set(m.rejected ?? []),
       labels: m.labels ?? f.LABELS,
     });
   }
@@ -286,12 +293,18 @@ export function mockClient(options: MockOptions): Client {
       const problems = s.commitProblems.get(attr) ?? [];
       if (problems.length > 0) fail(409, `the branch does not agree with the automation/AI policy of nixpkgs: ${problems.map((p) => `commit ${p.sha.slice(0, 12)}: ${p.problems.join(", ")}`).join("; ")}`);
       const number = meta.number ?? 580201;
-      for (const step of f.logSteps(typeof failedLog === "string" ? failedLog : f.publishLog(attr, number))) {
+      const force = input.force === true;
+      // As the server: without `force`, the fork rejects the push, and no `gh` command starts.
+      const rejected = s.rejected.has(attr) && !force;
+      const log = typeof failedLog === "string" ? failedLog : rejected ? f.rejectedPublishLog(attr) : f.publishLog(attr, number, 0, force);
+      for (const step of f.logSteps(log)) {
         s.publishLogs.set(attr, step);
         changed(s, attr);
         await sleep(LOG_STEP_MS);
       }
       if (failed !== null) throw failed;
+      if (rejected) throw new ApiError(500, f.rejectedPushError(attr), { error: f.rejectedPushError(attr), publish_log: log });
+      s.rejected.delete(attr);
       const now = new Date().toISOString();
       t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: run?.head ?? null, confirmed: now };
       t.state = "pr";

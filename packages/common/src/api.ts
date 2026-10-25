@@ -51,7 +51,11 @@
  *   `gh api` for the pull request and for the labels) and its `stdout` and `stderr` go into
  *   `publish.log` of the task. Each request writes the file again. The `TaskDetail` has the file in `publish_log`.
  *   Each error of this route is a `PublishError`: its `publish_log` is the log of this request, or `null` when no
- *   command started.
+ *   command started. The push replaces the branch on the fork only when the fork has the commit of `Pr.pushed`.
+ *   Without `Pr.pushed`, the push only adds commits to the branch on the fork. When the fork rejects the push, the
+ *   request gives the error with the output of `git`. Then the person can set the tick box `Force push` of the page.
+ *   With it, the next request has `force: true`. Then `git push --force` replaces the branch on the fork when the
+ *   draft has no `pushed` commit. See `PublishInput.force`.
  * - `GET /api/campaigns/:c/tasks/:attr/publish-log` gives `publish.log` of the task as text, or 404 when the file is
  *   not there. After the conditions of `POST .../pr`, the first line of the request replaces the file. Then the file
  *   gets each command when it starts, and its output when it stops. Thus the page reads this route each second while
@@ -227,8 +231,17 @@ export type DraftFromRun = z.infer<typeof DraftFromRunSchema>;
  * The body of `POST .../tasks/:attr/pr`. The person sets the tick box of the page: with it, the person agrees with the
  * last part of the AI disclosure. See `Pr.confirmed`.
  */
-export const PublishInputSchema = z.object({ confirmed: z.literal(true) });
-export type PublishInput = z.infer<typeof PublishInputSchema>;
+export const PublishInputSchema = z.object({
+  confirmed: z.literal(true),
+  /**
+   * The person set the tick box `Force push`, for example after the fork rejected a push. Then the push replaces the
+   * branch on the fork. When `Pr.pushed` is set, the push replaces it only when the fork has that commit. See `push` in
+   * the fleet package.
+   */
+  force: z.boolean().default(false),
+});
+/** The body that a client sends: without `force`, the server uses `false`. */
+export type PublishInput = z.input<typeof PublishInputSchema>;
 
 /** The error of `POST .../tasks/:attr/pr` without the body `{ "confirmed": true }`. */
 export const CONFIRM_ERROR = "confirm that you established confidence in this output";

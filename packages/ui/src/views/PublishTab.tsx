@@ -105,6 +105,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const unmet = newestRun?.status === "unverified" ? newestRun.checks.filter((r) => r.status !== "pass").map((r) => r.name) : [];
   const labels = useLoad(() => client.labels(c), `labels:${c}`);
   const settings = useLoad(() => client.settings(), "settings");
+  const fork = settings.data?.fork_effective ?? null;
 
   const saved: DraftInput | null = meta !== null && detail.draft !== null ? { title: meta.title, labels: meta.labels, description: detail.draft, words: meta.words } : null;
   const [edit, setEdit] = useState<DraftInput | null>(null);
@@ -122,6 +123,11 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const [attempts, setAttempts] = useState(0);
   /** The tick box above the button. It is clear when the page opens, and again after each click of the button that gave no error. */
   const [confirmed, setConfirmed] = useState(false);
+  /**
+   * The tick box `Force push` after the button: the push replaces the branch on the fork. See `PublishInput.force`. It
+   * is clear when the page opens, and again after each click of the button.
+   */
+  const [force, setForce] = useState(false);
 
   const save = useAction(async (input: DraftInput) => {
     onDetail(await client.saveDraft(c, attr, { ...input, title: input.title.trim() }));
@@ -138,7 +144,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     const before = detail.publish_log;
     setAttempt({ before, log: null });
     setAttempts((n) => n + 1);
-    const request = client.createPr(c, attr, { confirmed: true });
+    const request = client.createPr(c, attr, { confirmed: true, force });
     const stopped = request.then(
       () => true,
       () => true,
@@ -158,6 +164,8 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     } catch (error) {
       setAttempt({ before, log: publishLogOf(error) });
       throw error;
+    } finally {
+      setForce(false);
     }
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
@@ -290,11 +298,12 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
             />
             <div className="row">
               <Button variant="primary" disabled={blockers.length > 0} pending={publish.pending} onClick={() => void publish.run()}>
-                {meta?.number != null ? "Update pull request" : "Create pull request"}
+                {meta?.number != null ? "Push and update pull request" : "Push and create pull request"}
               </Button>
               <span className="small muted">
-                It pushes <span className="mono">{task.branch_name}</span> to the fork of {settings.data?.fork_effective ?? "the settings"}.
+                to {fork === null ? "the fork of the settings" : <span className="mono">{`${fork}/${campaign.issue.repo.split("/")[1] ?? ""}`}</span>}
               </span>
+              <Checkbox checked={force} onCheckedChange={setForce} disabled={publish.pending} label="Force push" />
             </div>
             {blockers.length > 0 && (
               <ul className="reasons" aria-label="Reasons that the button is disabled">

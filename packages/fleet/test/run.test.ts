@@ -36,7 +36,6 @@ import {
   taskViews,
   updateBase,
   worktreePath,
-  writePr,
   writeRun,
   writeSettings,
   writeTasks,
@@ -230,11 +229,15 @@ test("a run with a commit, a description and a check that passes is ok", async (
   const fork = join(tmp, "gh", "someone", "nixpkgs");
   assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), run.head);
 
-  // A new commit replaces the head. The push replaces the branch of the fork only when the fork has the commit of the last push.
+  // A new commit replaces the head. Without `force`, the push replaces the branch of the fork only when the fork has the commit of the last push.
   const wt = worktreePath(ctx, campaign, "foo");
   git(wt, "commit", "-q", "--amend", "-m", "foo: use cacert bundle (2)");
   await assert.rejects(push(ctx, "t/foo"), /rejected/);
   await assert.rejects(push(ctx, "t/foo", master), /stale info/);
+  // With `force`, the push replaces the branch of the fork, also when the fork does not have the commit of the last push.
+  await push(ctx, "t/foo", master, undefined, true);
+  assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), git(wt, "rev-parse", "HEAD"), "`force` replaced the branch of the fork");
+  git(fork, "update-ref", "refs/heads/t/foo", run.head ?? "");
   await push(ctx, "t/foo", run.head);
   assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), git(wt, "rev-parse", "HEAD"));
   git(wt, "reset", "-q", "--hard", run.head ?? "");
@@ -260,7 +263,7 @@ esac
   await chmod(gh, 0o755);
   process.env["PATCHIX_GH_BIN"] = gh;
   try {
-    // The branch of the fork has a different commit (see the first test), and the draft has no `pushed` commit. Thus `git push` gives an error.
+    // The branch of the fork has a different commit (see the first test), and the draft has no `pushed` commit. Thus the fork rejects `git push`.
     // When the person did not set the tick box, no command starts.
     await assert.rejects(createOrUpdatePr(ctx, "t", "foo", {} as PublishInput), (e: unknown) => {
       assert.deepEqual([(e as { status?: unknown }).status, (e as Error).message, publishLogOf(e)], [409, CONFIRM_ERROR, null]);
@@ -276,19 +279,20 @@ esac
     assert.ok(!failed.includes("gh.sh"), "no gh command after the push failed");
     assert.equal(await readPublishLog(ctx, "t", "foo"), failed);
 
-    const head = git(fork, "rev-parse", "refs/heads/t/foo");
     const draft = await readPr(ctx, "t", "foo");
-    assert.ok(draft !== null);
-    assert.equal(draft.confirmed, null, "a publish with an error does not record the confirmation");
-    await writePr(ctx, "t", "foo", { ...draft, pushed: head });
-    const pr = await createOrUpdatePr(ctx, "t", "foo", { confirmed: true });
+    assert.deepEqual([draft?.confirmed, draft?.pushed], [null, null], "a publish with an error does not record the confirmation or a push");
+    const tip = git(repoPath(ctx), "rev-parse", "refs/heads/t/foo");
+    assert.notEqual(git(fork, "rev-parse", "refs/heads/t/foo"), tip, "the rejected push did not change the fork");
+
+    // The person sets the tick box `Force push`: the push replaces the branch on the fork.
+    const pr = await createOrUpdatePr(ctx, "t", "foo", { confirmed: true, force: true });
     assert.deepEqual([pr.number, pr.url], [42, "https://github.com/NixOS/nixpkgs/pull/42"]);
     assert.match(pr.confirmed ?? "", /^\d{4}-\d\d-\d\dT[\d:]+Z$/);
     assert.equal((await readPr(ctx, "t", "foo"))?.confirmed, pr.confirmed, "pr.yaml has the time of the confirmation");
     const log = (await readPublishLog(ctx, "t", "foo")) ?? "";
     const commands = log.split("\n").filter((l) => l.startsWith("$ ")).map((l) => l.replace(gh, "gh").replace(/body=@\S+/, "body=@<file>"));
     assert.deepEqual(commands, [
-      `$ git push --force-with-lease=t/foo:${head} fork t/foo`,
+      "$ git push --force fork t/foo",
       "$ gh api -X POST repos/NixOS/nixpkgs/pulls -f base=master -f head=someone:t/foo -f 'title=foo: use cacert bundle instead of bundled CA file' -F body=@<file> --jq '{number, html_url, state}'",
       "$ gh api -X POST repos/NixOS/nixpkgs/issues/42/labels -f 'labels[]=1.severity: security' --jq '.[].name'",
       "$ gh api -X PATCH repos/NixOS/nixpkgs/pulls/42 -f 'title=foo: use cacert bundle instead of bundled CA file' -F body=@<file> --jq '{number, html_url, state}'",
@@ -298,7 +302,7 @@ esac
     assert.ok(log.endsWith("\n# the pull request is #42: https://github.com/NixOS/nixpkgs/pull/42\n"), log);
     const early = await readFile(seen, "utf8");
     assert.ok(log.startsWith(early) && early.includes(" t/foo -> t/foo (forced update)\n"), `publish.log gets each command while the request operates: ${early}`);
-    assert.equal(git(fork, "rev-parse", "refs/heads/t/foo"), pr.pushed);
+    assert.deepEqual([pr.pushed, git(fork, "rev-parse", "refs/heads/t/foo")], [tip, tip], "pr.yaml has the pushed commit, and the fork has it");
     assert.equal(await exists(worktreePath(ctx, campaign, "foo")), true, "the worktree stays after the publish");
   } finally {
     delete process.env["PATCHIX_GH_BIN"];

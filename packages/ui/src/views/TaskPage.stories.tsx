@@ -248,7 +248,7 @@ export const TrailerMissing: Story = {
     const reasons = await canvas.findByRole("list", { name: "Reasons that the button is disabled" });
     await within(reasons).findByText(/^Commit 9e8d7c6b5a4f \(.*\): no `Assisted-by: <tool> \(<model>\) with patchix` line, a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic\.com>\.$/);
     await within(reasons).findByText("Amend the commit in the worktree, then reload.");
-    const button = await canvas.findByRole("button", { name: "Create pull request" });
+    const button = await canvas.findByRole("button", { name: "Push and create pull request" });
     await expect(button).toBeDisabled();
   },
 };
@@ -281,7 +281,7 @@ export const DraftNotSaved: Story = {
 };
 
 export const PublishCreated: Story = {
-  parameters: { docs: { description: { story: "Publish tab: the person set the tick box and clicked Create pull request. The Output under the button opens and gives each command and its output. The tick box is clear again, and the link of the pull request gives the time of the confirmation." } } },
+  parameters: { docs: { description: { story: "Publish tab: the person set the tick box and clicked Push and create pull request. The Output under the button opens and gives each command and its output. The tick box is clear again, and the link of the pull request gives the time of the confirmation." } } },
   beforeEach: openTab("publish"),
   decorators: [
     seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
@@ -290,7 +290,7 @@ export const PublishCreated: Story = {
   ],
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
-    await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Push and create pull request" }));
     await canvas.findByText(/^Confidence confirmed /, undefined, PR_REQUEST);
     await canvas.findByLabelText("Output of the publish");
   },
@@ -300,7 +300,7 @@ export const Publishing: Story = {
   parameters: {
     docs: {
       description: {
-        story: "Publish tab: the request of Create pull request operates. The Output opens empty at the click. Each second, the page reads publish.log and shows the commands that started. At the end, the log of the response replaces it.",
+        story: "Publish tab: the request of Push and create pull request operates. The Output opens empty at the click. Each second, the page reads publish.log and shows the commands that started. At the end, the log of the response replaces it.",
       },
     },
   },
@@ -313,11 +313,11 @@ export const Publishing: Story = {
   ],
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
-    await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Push and create pull request" }));
     await canvas.findByText("Loading…");
     // The first read gives a part of the log, before the response.
     await canvas.findByText(/\$ git push fork/, undefined, PR_REQUEST);
-    await canvas.findByRole("button", { name: "Create pull request", busy: true });
+    await canvas.findByRole("button", { name: "Push and create pull request", busy: true });
     await canvas.findByText(/# the pull request is #580201/, undefined, PR_REQUEST);
   },
 };
@@ -348,8 +348,56 @@ export const PublishFailed: Story = {
   ],
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
-    await userEvent.click(await canvas.findByRole("button", { name: "Create pull request" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Push and create pull request" }));
     await canvas.findByText(/\[exit code 1\]/, undefined, PR_REQUEST);
+  },
+};
+
+/** The branch of the fork has a different commit: the fork rejects a push without the tick box `Force push`. */
+const rejectedFork = seed(() => task(A, { state: "ready", runs: [importedRun(A, 25)], head: AMENDED, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+  drafts: { [A]: description(A) },
+  rejected: [A],
+});
+
+export const PushRejected: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "Publish tab: the branch of the fork has a different commit, for example an imported branch that a person changed. The fork rejected the push, and no gh command started. The error and the Output give the output of git. For the next click, the person can set the tick box Force push.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [rejectedFork],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Push and create pull request" }));
+    await canvas.findByText(/\[exit code 1\]/, undefined, PR_REQUEST);
+    await expect(await canvas.findByRole("checkbox", { name: "Force push" })).not.toBeChecked();
+  },
+};
+
+export const ForcePushed: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Publish tab: after the rejected push, the person set the tick box Force push and clicked again. `git push --force` replaced the branch on the fork, and the pull request was made. The tick box Force push is clear again.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [rejectedFork],
+  play: async ({ canvas, userEvent }) => {
+    const button = () => canvas.findByRole("button", { name: "Push and create pull request" });
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    await userEvent.click(await button());
+    await canvas.findByText(/\[exit code 1\]/, undefined, PR_REQUEST);
+    await userEvent.click(await canvas.findByRole("checkbox", { name: "Force push" }));
+    await userEvent.click(await button());
+    await canvas.findByText(/^Confidence confirmed /, undefined, PR_REQUEST);
+    await canvas.findByText(/\$ git push --force fork/);
+    await expect(await canvas.findByRole("checkbox", { name: "Force push" })).not.toBeChecked();
   },
 };
 

@@ -286,9 +286,11 @@ export const problemText = (p: CommitProblems) => `commit ${p.sha.slice(0, 12)}:
 /**
  * Pushes the branch to the fork with SSH. `expected` is the commit of the last push of patchix. When it is set, the
  * push can replace the branch of the fork, but only when the fork has that commit. When it is `null`, the push must
- * add commits to the branch of the fork. The output of `git` goes into `log`.
+ * add commits to the branch of the fork. With `force`, `git push --force` replaces the branch
+ * of the fork: the person agreed to it, also when `expected` is set. The output of `git` goes
+ * into `log`.
  */
-export async function push(ctx: Ctx, branch: string, expected: string | null = null, log?: Log): Promise<void> {
-  const lease = expected === null ? [] : [`--force-with-lease=${branch}:${expected}`];
-  await git(repoPath(ctx), ["push", ...lease, "fork", branch], { log });
+export async function push(ctx: Ctx, branch: string, expected: string | null = null, log?: Log, force = false): Promise<void> {
+  const replace = force ? ["--force"] : expected !== null ? [`--force-with-lease=${branch}:${expected}`] : [];
+  await git(repoPath(ctx), ["push", ...replace, "fork", branch], { log });
 }

@@ -9,7 +9,7 @@
 // RULE: the server shows live data. The tour must not change the data.
 // Do not click a button that starts an operation: `Queue`, `Queue selected`, `Queue again`, `Clear queue`,
 // `Remove from queue`, `Stop`, `Sync`, `Refresh`, `Fetch base`, `Ask`, `Save draft`, `Make draft`, `Make worktree`,
-// `Remove worktree`, `Create pull request`.
+// `Remove worktree`, `Push and create pull request`, `Push and update pull request`.
 // Do not type in the draft. Do not change the labels.
 // Only open pages, select tabs, open disclosures, type in `Filter attributes`, move the pointer and move up and down.
 // The script also stops each request that is not GET.
@@ -40,7 +40,7 @@ const FPS = 30;
 const PREFERRED_TASK = "pgsql-tools";
 
 // The text of each control that the tour must not click.
-const FORBIDDEN = /^(Queue|Queue selected.*|Queue again|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Ask.*|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Create pull request|Update pull request|Replace|×)$/;
+const FORBIDDEN = /^(Queue|Queue selected.*|Queue again|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Ask.*|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Push and create pull request|Push and update pull request|Replace|×)$/;
 
 const work = mkdtempSync(join(tmpdir(), "patchix-tour-"));
 const frames = join(work, "frames");
@@ -284,10 +284,10 @@ try {
     await sleep(1600);
     await key("Escape", 27);
     await sleep(200);
-    // The pointer stops on `Create pull request`. The tour does not click it.
-    const create = `__tour.find("button", "Create pull request")`;
+    // The pointer stops on `Push and create pull request`. The tour does not click it.
+    const create = `__tour.find("button", "Push and create pull request")`;
     await scroll("null", { top: `__tour.top(${create}) - 600` }, 700);
-    if (await js(`${create}.disabled`)) console.error("The button `Create pull request` is disabled.");
+    if (await js(`${create}.disabled`)) console.error("The button `Push and create pull request` is disabled.");
     await hover(create, 500);
     await sleep(2500);
   }

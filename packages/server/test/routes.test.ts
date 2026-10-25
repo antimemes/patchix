@@ -136,6 +136,9 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.equal(logged.publish_log, error.publish_log, "publish.log");
   assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), error.publish_log, "the route of publish.log");
   assert.equal(logged.task.pr_meta?.confirmed, null, "a publish with an error does not record the confirmation");
+  // With the tick box `Force push`, the push replaces the branch on the fork. The draft has no `pushed` commit.
+  const forced = await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: true, force: true }));
+  assert.match(PublishErrorSchema.parse(forced.body).publish_log ?? "", /\n\$ git push --force fork t\/foo\n/);
 
   // A newest run that is `unverified` also starts `git push`: the person examined it. A newest run that is `failed` does not.
   await writeRun(ctx, "t", { ...run("foo", "20260101-000010", "unverified", null), finished: "f" });

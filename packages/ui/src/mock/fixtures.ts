@@ -302,11 +302,18 @@ export function trailerProblems(attr: string): CommitProblems[] {
 const FORK_URL = "ssh://git@github.com/someone/nixpkgs";
 const PULL_FIELDS = "--jq '{number, html_url, state}'";
 
-/** The first part of `publish.log`: the push of the branch. */
-function pushLog(attr: string, minutesAgo: number): string[] {
+/** The first line of `publish.log`. */
+const publishHeading = (attr: string, minutesAgo: number) => `# publish of cacert/${attr}, ${at(minutesAgo).replace(/\.\d+Z$/, "Z")}`;
+
+/**
+ * The first part of `publish.log`: the push of the branch. With `force`, the push replaced a different commit on the
+ * branch of the fork: see `PublishInput.force`.
+ */
+function pushLog(attr: string, minutesAgo: number, force = false): string[] {
   const branch = `cacert/${attr}`;
+  if (force) return [publishHeading(attr, minutesAgo), `$ git push --force fork ${branch}`, `To ${FORK_URL}`, ` + 1f2e3d4...9e8d7c6 ${branch} -> ${branch} (forced update)`];
   return [
-    `# publish of cacert/${attr}, ${at(minutesAgo).replace(/\.\d+Z$/, "Z")}`,
+    publishHeading(attr, minutesAgo),
     `$ git push fork ${branch}`,
     "remote: ",
     `remote: Create a pull request for '${branch}' on GitHub by visiting:`,
@@ -317,12 +324,12 @@ function pushLog(attr: string, minutesAgo: number): string[] {
   ];
 }
 
-/** `publish.log` after `createOrUpdatePr` made the pull request `number`. */
-export function publishLog(attr: string, number: number, minutesAgo = 0): string {
+/** `publish.log` after `createOrUpdatePr` made the pull request `number`. `force`: see `pushLog`. */
+export function publishLog(attr: string, number: number, minutesAgo = 0, force = false): string {
   const pull = `{"html_url":"https://github.com/NixOS/nixpkgs/pull/${number}","number":${number},"state":"open"}`;
   const title = `'title=${attr}: use the CA bundle of cacert'`;
   return [
-    ...pushLog(attr, minutesAgo),
+    ...pushLog(attr, minutesAgo, force),
     `$ gh api -X POST repos/NixOS/nixpkgs/pulls -f base=master -f head=someone:cacert/${attr} -f ${title} -F body=@/tmp/patchix-pr-Xq3v/body.md ${PULL_FIELDS}`,
     pull,
     `$ gh api -X POST repos/NixOS/nixpkgs/issues/${number}/labels -f 'labels[]=1.severity: security' --jq '.[].name'`,
@@ -350,6 +357,29 @@ export function failedPublishLog(attr: string): string {
     "[exit code 1]",
     "",
   ].join("\n");
+}
+
+/** The output of `git push` when the branch of the fork has a commit that is not in the branch of the task. */
+function rejectedPush(attr: string): string[] {
+  const branch = `cacert/${attr}`;
+  return [
+    `To ${FORK_URL}`,
+    ` ! [rejected]            ${branch} -> ${branch} (non-fast-forward)`,
+    `error: failed to push some refs to '${FORK_URL}'`,
+    "hint: Updates were rejected because a pushed branch tip is behind its remote",
+    "hint: counterpart. If you want to integrate the remote changes, use 'git pull'",
+    "hint: before pushing again.",
+  ];
+}
+
+/** `publish.log` when the fork rejects the push. Then no `gh` command starts. */
+export function rejectedPublishLog(attr: string): string {
+  return [publishHeading(attr, 0), `$ git push fork cacert/${attr}`, ...rejectedPush(attr), "[exit code 1]", ""].join("\n");
+}
+
+/** The error of `POST .../pr` when the fork rejects the push, as the server gives it. */
+export function rejectedPushError(attr: string): string {
+  return `git push fork cacert/${attr} failed (1): ${rejectedPush(attr).join("\n")}`;
 }
 
 /** `prompt.md` of a run: the prompt of the campaign, `campaigns/style.md` and the task block. */

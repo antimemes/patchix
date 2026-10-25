@@ -131,7 +131,8 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
  * `publishLogOf`.
  *
  * `input` shows that the person set the tick box of the page: see `PublishInput`. When the request has no error, the
- * draft gets the time of the request in `confirmed`.
+ * draft gets the time of the request in `confirmed`. With `input.force`, the push can replace the branch on the fork:
+ * see `push`.
  */
 export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: PublishInput): Promise<Pr> {
   const confirmed = now();
@@ -153,7 +154,7 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
 
     const log = await publishLog(ctx, c, attr, `# publish of ${c}/${attr}, ${now()}`);
     try {
-      const done = await publish(ctx, campaign, attr, pr, body, log, confirmed);
+      const done = await publish(ctx, campaign, attr, pr, body, log, confirmed, input.force === true);
       log.push(`# the pull request is #${done.number}${done.url === null ? "" : `: ${done.url}`}`);
       return done;
     } catch (e) {
@@ -198,15 +199,15 @@ export function publishLogOf(e: unknown): string | null {
 
 /**
  * The commands of `createOrUpdatePr`, after its conditions. Each command and its output go into `log`. The draft gets
- * `confirmed` only at the end, when no command gave an error.
+ * `confirmed` only at the end, when no command gave an error. `force`: see `push`.
  */
-async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, body: string, log: Log, confirmed: string): Promise<Pr & { number: number }> {
+async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, body: string, log: Log, confirmed: string, force: boolean): Promise<Pr & { number: number }> {
   const c = campaign.name;
   const branch = await taskBranch(ctx, campaign, attr);
   // The remote `fork` can have the URL of a previous fork of the settings.
   const fork = await forkOf(ctx);
   await setForkRemote(ctx, campaign);
-  await push(ctx, branch, draft.pushed, log);
+  await push(ctx, branch, draft.pushed, log, force);
   let pr: Pr = { ...draft, pushed: await revParse(repoPath(ctx), `refs/heads/${branch}`) };
   await writePr(ctx, c, attr, pr);
 
