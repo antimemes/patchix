@@ -39,7 +39,6 @@ Instructions:
 
 - Write each path in full. For more than one copy, use a `for` loop on the full paths. Do not use `find`: when `find` finds no file, the build completes and the fix is not there.
 - Do not remove a file that is not a copy of the decoder to get a `pass` from the check. When the fix removes a library or an executable, the description must tell the cause. For example: the package uses the `brotli` of nixpkgs after the change.
-- Do not add a comment that tells the same as the next line. Add a comment only when a person must know the cause, for example the cause of a patch file.
 - Change only the package of the task. Do not change `brotli`, `nodejs`, `bun`, the `dotnetCorePackages`, `lib/` or other packages. When the copy comes from a different package of nixpkgs, see "When there is no small fix" and tell the name of that package.
 - Keep the format of the file. Do not change lines that the fix does not touch.
 - Make one commit. The attribute in the message is the attribute of the task. The message is one of these:

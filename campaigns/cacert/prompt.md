@@ -20,7 +20,6 @@ Instructions:
 - Do not remove a file that is not a CA file to get a `pass` from the check. When the fix removes an executable file, a worker, a library or a directory, the description must tell the cause: no software uses it.
 - A fix can add inputs, write an archive again or change the build, when a symlink is not sufficient. Then the description must tell the cause: the symlink is not sufficient, and what the fix does.
 - Commit only a change that makes the package use `cacert`. A change that only moves files or changes other lines is not a fix of this campaign.
-- Do not add a comment that tells the same as the next line. Add a comment only when a person must know the cause, for example when the package does not read the file.
 - Change only the package of the task. Do not change `cacert`, `lib/` or other packages.
 - Keep the format of the file. Do not change lines that the fix does not touch.
 - Make one commit. The message is `<attr>: use cacert bundle instead of vendored CA bundle` (or `... CA file`, `... CA list`, as applicable). The attribute in the message is the attribute of the task, for example `python3Packages.wassima: use cacert bundle instead of vendored CA list`. The last line of the message is `Assisted-by: Claude Code (<model name>) with patchix`, for example `Assisted-by: Claude Code (Claude Opus 5.5) with patchix`. The `automation/AI policy` of nixpkgs makes this line necessary, with the tool and the model. Do not add a `Co-Authored-By` line.

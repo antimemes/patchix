@@ -1,3 +1,12 @@
+## How to write a comment in the package
+
+A maintainer of the package reads the comment a long time after this campaign, and does not know the campaign. The comment tells what the change is for, about the package only: what the package does, and what it does after the change. It does not compare the change with other fixes, and it does not tell the mechanism: the code below it shows that.
+
+- Bad: `# the CA list is a string in the code, not a file`. It is only clear to a person who knows that the usual fix is a symlink.
+- Good: `# Override the bundled list of trusted CAs with the system trust store`.
+
+Add a comment only when a person must know the cause. Do not add a comment that tells the same as the next line. The same applies to the commit message.
+
 ## How to write the text
 
 memelint examines the pull request description with the ASD-STE100 dictionary in `strict` mode. If the text does not obey these instructions, the run stops with an error.

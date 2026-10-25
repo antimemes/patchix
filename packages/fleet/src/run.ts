@@ -73,6 +73,7 @@ async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, run: Run, w
     "# The question",
     "",
     "A person asks this question about the task. Reply to the question. Change the files of the worktree only when the question tells you to.",
+    "The instructions of the campaign apply to each change that a question asks for. For example, a comment that a question asks for obeys the comment instructions.",
     "When you change the files, amend the commit. When your change makes the description wrong, write `description.md` of this run again, in full. If not, do not write it.",
     "When the question asks you to examine the commit against the instructions, read `git show HEAD` and give each instruction that the commit does not obey, with the line.",
     "",
