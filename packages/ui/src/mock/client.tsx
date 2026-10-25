@@ -286,8 +286,6 @@ export function mockClient(options: MockOptions): Client {
       if (meta.number !== null && meta.state !== "open") fail(409, `the pull request #${meta.number} is ${meta.state}`);
       const job = s.jobs.find((j) => j.attr === attr);
       if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
-      const findings = f.fakeLint(s.drafts.get(attr) ?? "").findings.length;
-      if (findings > 0) fail(409, `the draft has ${findings} memelint findings`);
       const run = t.runs[0];
       if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
       const problems = s.commitProblems.get(attr) ?? [];

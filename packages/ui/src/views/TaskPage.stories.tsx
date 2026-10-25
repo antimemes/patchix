@@ -191,7 +191,7 @@ export const ReadyNoDraft: Story = {
 };
 
 export const ReadyDraft: Story = {
-  parameters: { docs: { description: { story: "5. Publish tab, ready, with a draft: two lint findings and an ask that operates. The pull request button gives the reasons." } } },
+  parameters: { docs: { description: { story: "5. Publish tab, ready, with a draft: two lint findings and an ask that operates. The findings do not stop the pull request: the ask stops it, and the pull request button gives the reason." } } },
   beforeEach: openTab("publish"),
   decorators: [
     seed(() => task(A, { state: "ready", runs: [okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
@@ -254,7 +254,7 @@ export const TrailerMissing: Story = {
 };
 
 export const ReadyToPublish: Story = {
-  parameters: { docs: { description: { story: "6. Publish tab, ready: no findings, an ok run and no job. The person set the tick box: they established confidence in this output. Thus the button is enabled." } } },
+  parameters: { docs: { description: { story: "6. Publish tab, ready: an ok run and no job. The person set the tick box: they established confidence in this output. Thus the button is enabled." } } },
   beforeEach: openTab("publish"),
   decorators: [
     seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {

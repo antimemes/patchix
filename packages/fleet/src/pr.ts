@@ -121,9 +121,10 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
 /**
  * Pushes the branch to the fork and makes the pull request, or writes its title and description again. Then it
  * adds the labels. A new pull request gets its description two times: the second time has its number. The worktree
- * stays: only `DELETE …/worktree` removes it. These conditions give an error: no draft, memelint findings and a
- * newest run that is not `ok` or `unverified`. A job of the task and a pull request that is `merged` or `closed`
- * also give an error. A commit of the branch with a problem also gives an error: see `commitProblems`.
+ * stays: only `DELETE …/worktree` removes it. These conditions give an error: no draft, and a newest run that is
+ * not `ok` or `unverified`. A job of the task and a pull request that is `merged` or `closed` also give an error. A
+ * commit of the branch with a problem also gives an error: see `commitProblems`. memelint findings of the draft do
+ * not stop the pull request: the page shows them.
  *
  * After the conditions, each command and its output go into `publish.log` of the task, also after an error. The file
  * has only the commands of the newest request. It gets each line at the time of the line: thus the page can show the
@@ -144,8 +145,6 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     const body = (await readDraft(ctx, c, attr)) ?? fail(404, `the task ${attr} has no pr.md`);
     const job = await taskJob(ctx, c, attr);
     if (job !== null) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
-    const findings = (await lintDraft(ctx, c, attr))?.findings ?? [];
-    if (findings.length > 0) fail(409, `the draft has ${findings.length} memelint findings`);
     const newest = (await listRuns(ctx, c, attr))[0];
     // A person examined an `unverified` run on the page: the tick box of `input` shows it.
     if (newest === undefined || !publishable(newest)) fail(409, `the newest run of ${attr} is not ok or unverified`);

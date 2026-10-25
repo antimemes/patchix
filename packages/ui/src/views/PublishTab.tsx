@@ -54,7 +54,6 @@ function shownOutput(file: string | null, attempt: Attempt | null, pending: bool
 export interface PrState {
   hasDraft: boolean;
   draftDirty: boolean;
-  findings: number | null;
   newestRun: Run | undefined;
   jobRunning: boolean;
   /** The state of the pull request on GitHub, or `null` when the draft has no pull request. */
@@ -75,7 +74,6 @@ export function prBlockers(s: PrState): string[] {
   if (s.commitProblems.length > 0) reasons.push(AMEND_HINT);
   if (!s.hasDraft) reasons.push("Make a draft first.");
   if (s.draftDirty) reasons.push("Save the changes of the draft.");
-  if (s.findings !== null && s.findings > 0) reasons.push(`Correct the ${plural(s.findings, "lint finding")}.`);
   if (s.newestRun === undefined) reasons.push("The task has no run.");
   else if (!publishable(s.newestRun)) reasons.push(`The newest run is ${s.newestRun.status}, not ok or unverified.`);
   if (s.jobRunning) reasons.push("A job of this task operates.");
@@ -170,7 +168,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
-  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, findings: findings?.length ?? null, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems });
+  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems });
 
   if (draft === null) {
     return (

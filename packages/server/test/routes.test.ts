@@ -164,7 +164,10 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.equal(saved.task.pr_meta?.title, "foo: new title");
   assert.ok(saved.lint?.findings.some((f) => f.file === "pr.md" && f.line === 1), "the PUT lints the new draft");
   assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).lint, saved.lint, "the GET lints the draft");
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: `the draft has ${saved.lint?.findings.length} memelint findings`, publish_log: null } });
+  // memelint findings do not stop the pull request: the conditions agree, thus `createOrUpdatePr` starts `git push`.
+  const linted = await json("/api/campaigns/t/tasks/foo/pr", confirm);
+  assert.equal(linted.status, 500, "memelint findings do not stop the pull request");
+  assert.match(PublishErrorSchema.parse(linted.body).publish_log ?? "", /\n\$ git push fork t\/foo\n/);
   assert.equal((await json("/api/campaigns/t/tasks/bar/draft", send("PUT", draft))).status, 404, "no draft");
   assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).status, 404, "no worktree");
 });
