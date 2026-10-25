@@ -16,10 +16,12 @@ import {
   branchCommits,
   branchDiff,
   branchState,
+  cacheUntracked,
   cloneBase,
   commitProblems,
   createOrUpdatePr,
   exists,
+  isClean,
   listRuns,
   makeDraft,
   publishLogOf,
@@ -211,6 +213,18 @@ test("a run with a commit, a description and a check that passes is ok", async (
   git(repo, "remote", "set-url", "fork", "https://github.com/someone/nixpkgs");
   await cloneBase(ctx, campaign);
   assert.equal(git(repo, "remote", "get-url", "fork"), `${ctx.github}/someone/nixpkgs`, "cloneBase corrects the URL of the fork of a repository that is there");
+  const fooTree = worktreePath(ctx, campaign, "foo");
+  assert.equal(git(repo, "config", "core.untrackedCache"), "true", "the clone sets the untracked cache");
+  assert.equal(git(fooTree, "config", "core.untrackedCache"), "true", "the worktree uses the config of the bare repository");
+  git(repo, "config", "--unset", "core.untrackedCache");
+  await cacheUntracked(repo);
+  assert.equal(git(repo, "config", "core.untrackedCache"), "true", "cacheUntracked sets it in a repository that is there");
+  await cacheUntracked(join(tmp, "no-repository"));
+  assert.equal(await isClean(fooTree), true);
+  await writeFile(join(fooTree, "pkgs", "foo", "fix.patch"), "");
+  assert.equal(await isClean(fooTree), false, "a new file without `git add` is a change");
+  await rm(join(fooTree, "pkgs", "foo", "fix.patch"));
+  assert.equal(await isClean(fooTree), true);
 
   const [view] = await taskViews(ctx, "t");
   assert.equal(view?.state, "ready");

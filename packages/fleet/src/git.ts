@@ -17,7 +17,7 @@ import { forkOf } from "./github.ts";
 import { capture, type CaptureOptions, type Log } from "./proc.ts";
 import { exists, fail, listRuns, readTasks, type Ctx } from "./store.ts";
 
-const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote"]);
+const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote", "config"]);
 const REFUSED = /^--(depth|deepen|unshallow)/;
 const NETWORK_MS = 60 * 60_000;
 
@@ -68,6 +68,19 @@ export async function setForkRemote(ctx: Ctx, campaign: Campaign): Promise<boole
 }
 
 /**
+ * Sets `core.untrackedCache` of the bare repository to `true`, when the repository is there. The worktrees use the
+ * config of the bare repository. Without it, `git status` in a worktree of nixpkgs is slow, approximately 7 seconds:
+ * it reads each directory to find new files. With it, the index of the worktree keeps the directories that did not
+ * change.
+ */
+export async function cacheUntracked(repo: string): Promise<void> {
+  if (!(await exists(join(repo, "HEAD")))) return;
+  // A write locks the config file (see `setForkRemote`): thus only a different value is written.
+  const value = (await git(repo, ["config", "--get", "core.untrackedCache"], { codes: [0, 1] })).trim();
+  if (value !== "true") await git(repo, ["config", "core.untrackedCache", "true"]);
+}
+
+/**
  * Makes the bare repository when it is not there: a clone with depth 1 of the `base_branch`, and the remote `fork`.
  * When the repository is there, it corrects the URL of the remote `fork` (see `setForkRemote`).
  */
@@ -81,6 +94,7 @@ export async function cloneBase(ctx: Ctx, campaign: Campaign): Promise<string> {
     const url = `${ctx.github}/${campaign.issue.repo}`;
     await capture("git", ["clone", "--bare", "--depth=1", "--single-branch", "--branch", campaign.base_branch, url, tmp], { timeoutMs: NETWORK_MS });
     await git(tmp, ["remote", "add", "fork", fork]);
+    await cacheUntracked(tmp);
     await rename(tmp, path).catch(async (e: unknown) => {
       if (!(await exists(join(path, "HEAD")))) throw e;
     });
@@ -198,9 +212,13 @@ export async function untracked(cwd: string): Promise<string[]> {
   return (await git(cwd, ["ls-files", "--others", "--exclude-standard"])).split("\n").filter((f) => f !== "");
 }
 
-/** Gives `true` when the worktree has no change that is not committed and no new file. */
+/**
+ * Gives `true` when the worktree has no change that is not committed and no new file. `git status` uses the cache of
+ * `cacheUntracked`, and `ls-files --others` does not. The new files are in the output also when the config of a
+ * person has `status.showUntrackedFiles=no`.
+ */
 export async function isClean(cwd: string): Promise<boolean> {
-  return (await git(cwd, ["status", "--porcelain"])).trim() === "";
+  return (await git(cwd, ["status", "--porcelain", "--untracked-files=normal"])).trim() === "";
 }
 
 /** The first line of the commit message. */
