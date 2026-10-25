@@ -33,12 +33,12 @@ Start each check command of the task block in the worktree. The output of the `h
 
 ## The description
 
-Write `description.md` in the run directory of the task block. It is the pull request description. Obey the text instructions below. The structure is:
+Write `description.md` in the run directory of the task block. It is the pull request description. Obey the text instructions below. The maintainer of the package reads this description. They see one pull request of this campaign, not the campaign. Write what they must know to accept the change, and no more. A fact that makes a difference to the change is good, for example the cause of a fix that is not the usual fix. A fact that makes no difference is work for the reader, and it reads as text that an agent made. The output of the check below has the numbers and the certificate names: do not copy them into the text. The structure is:
 
 ```
 Part of #576541.
 
-<One paragraph: what the package bundles, where, what the bundle trusts (from the harness output), what the change does and where (postInstall, postPatch...). Give the numbers of the harness output. Write only about the CA file: no text about other problems of the package.>
+<Two or three sentences. One: the package has a bundled CA file, with its path, and the file trusts the compromised eMudhra roots. Two: this change is the usual fix of this campaign, a symlink to the `cacert` bundle of nixpkgs in `postInstall`, or what the change does instead, and where. Three, only when the change is not the usual fix: the cause. No numbers, no certificate names, no text about the platforms or the code paths of the package, no text about other problems of the package.>
 
 {{disclosure}}
 
@@ -48,7 +48,7 @@ Part of #576541.
 
 {{check:harness}}
 
-<One paragraph: what the harness output shows. Before the change: how many of the 14 eMudhra chains the store accepts. After: none. When the live test ran: what the program did before and after.>
+<One or two sentences: before the change, the file accepts N of the 14 eMudhra chains; after, none. When the live test ran: one sentence on what the program did before and after.>
 
 {{template}}
 ```
