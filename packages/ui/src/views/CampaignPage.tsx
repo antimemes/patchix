@@ -13,7 +13,7 @@ import { Tabs } from "../components/Tabs.tsx";
 import { useToast } from "../components/Toast.tsx";
 import { Tooltip } from "../components/Tooltip.tsx";
 import { useClient } from "../client.tsx";
-import { STATES, ago, issueUrl, plural, time } from "../format.ts";
+import { STATES, ago, issueUrl, plural, syncLine, time } from "../format.ts";
 import { useAction, useDebounced, useHashTab, useLoad, useSignals } from "../hooks.ts";
 import { href, param, replaceParams } from "../router.ts";
 import { JobsStrip, NO_JOBS } from "./JobsStrip.tsx";
@@ -84,7 +84,7 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
     } else if (signal.type === "campaign") {
       reloadView();
     } else {
-      jobs.replace({ jobs: signal.jobs, queue: signal.queue, fleet: signal.fleet });
+      jobs.replace({ jobs: signal.jobs, queue: signal.queue, check: signal.check, fleet: signal.fleet });
     }
   });
 
@@ -98,10 +98,15 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
     keepFilters(name, window.location.search.slice(1));
   }, [name, states, query]);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  /** The warnings of the newest sync of this page. */
+  const [warnings, setWarnings] = useState<readonly string[]>([]);
 
   const sync = useAction(async () => {
-    view.replace(await client.sync(name));
-    toast("The task list is read again");
+    const { result, ...next } = await client.sync(name);
+    view.replace(next);
+    setWarnings(result.warnings);
+    if (result.queued > 0) jobs.reload();
+    toast("The state agrees with GitHub", syncLine(result));
   });
   const refresh = useAction(async () => {
     view.replace(await client.refresh(name));
@@ -172,7 +177,11 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
       </section>
 
       <div className="toolbar">
-        <Button onClick={() => void sync.run()} pending={sync.pending} title="Read the task list of the issue again, then the state of the pull requests.">
+        <Button
+          onClick={() => void sync.run()}
+          pending={sync.pending}
+          title="Read the task list of the issue again, the state of the pull requests and the branches of the fork. A branch of the fork without checks of the tip gets a check-only run."
+        >
           Sync
         </Button>
         <Button onClick={() => void refresh.run()} pending={refresh.pending} title={`Read the state of the pull requests of ${fork} on GitHub again: open, merged or closed.`}>
@@ -183,6 +192,16 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
         </Button>
       </div>
       {sync.error !== null && <Notice tone="error">Sync: {sync.error}</Notice>}
+      {warnings.length > 0 && (
+        <Notice tone="warning" aria-label="Sync warnings">
+          <p>The sync gave warnings:</p>
+          <ul className="reasons">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </Notice>
+      )}
       {refresh.error !== null && <Notice tone="error">Refresh: {refresh.error}</Notice>}
       {base.error !== null && <Notice tone="error">Fetch base: {base.error}</Notice>}
       {start.error !== null && <Notice tone="error">Queue: {start.error}</Notice>}

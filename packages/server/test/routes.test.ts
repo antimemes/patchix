@@ -271,7 +271,7 @@ test("the server adds the branches to the queue and starts the fleet in zellij",
     const res = await json(path, init);
     return { status: res.status, view: JobsViewSchema.parse(res.body) };
   };
-  assert.deepEqual((await jobsView()).view, { jobs: [], queue: [], fleet: false });
+  assert.deepEqual((await jobsView()).view, { jobs: [], queue: [], check: [], fleet: false });
   assert.equal((await json("/api/campaigns/t/jobs", send("POST", { keys: [] }))).status, 400);
   assert.equal((await json("/api/campaigns/t/jobs", { method: "POST", body: "nope" })).status, 400);
   assert.equal((await json("/api/campaigns/t/jobs", send("POST", { keys: ["nope"] }))).status, 404);
@@ -285,7 +285,7 @@ test("the server adds the branches to the queue and starts the fleet in zellij",
     await writeRun(ctx, "t", run("baz", "20260101-000001", "running", runner.pid ?? null));
     const added = await jobsView(send("POST", { keys: ["qux", "baz", "foo"] }));
     assert.equal(added.status, 202);
-    assert.deepEqual(added.view, { jobs: [{ key: "baz", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], fleet: true }, "the queue keeps the sequence of the request");
+    assert.deepEqual(added.view, { jobs: [{ key: "baz", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], check: [], fleet: true }, "the queue keeps the sequence of the request");
     const args = (await readFile(calls, "utf8")).split("---\n");
     // The test zellij lists no session: the server makes it, then opens the tab of the fleet.
     assert.deepEqual(args[0]?.trim().split("\n"), ["list-sessions", "--no-formatting"]);
@@ -304,7 +304,7 @@ test("the server adds the branches to the queue and starts the fleet in zellij",
 
     assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/jobs/qux")).view.queue, ["foo", "bar"], "the delete of a queued branch removes its entry");
     assert.equal((await json("/api/campaigns/t/jobs/qux", { method: "DELETE" })).status, 404, "no entry and no job");
-    assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/queue")).view, { jobs: added.view.jobs, queue: [], fleet: true });
+    assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/queue")).view, { jobs: added.view.jobs, queue: [], check: [], fleet: true });
     assert.equal((await json("/api/campaigns/zzz/queue", { method: "DELETE" })).status, 404);
   } finally {
     delete process.env["PATCHIX_TEST_FLEET_PID"];
@@ -453,7 +453,8 @@ test("an error of gh label list is an error of the route", async () => {
 
 test("the refresh writes the state of the pull request of the branch into the draft", async () => {
   const gh = join(tmp, "gh.sh");
-  await writeFile(gh, `#!/bin/sh\necho '[{"number":5,"state":"MERGED","mergedAt":"2026-10-23T12:00:00Z","url":"https://github.com/NixOS/nixpkgs/pull/5","headRefName":"t/foo"}]'\n`);
+  const listed = [{ number: 5, state: "MERGED", mergedAt: "2026-10-23T12:00:00Z", url: "https://github.com/NixOS/nixpkgs/pull/5", headRefName: "t/foo", title: "foo: fix", body: "", labels: [], createdAt: "2026-10-22T12:00:00Z", updatedAt: "2026-10-23T12:00:00Z" }];
+  await writeFile(gh, `#!/bin/sh\necho '${JSON.stringify(listed)}'\n`);
   await chmod(gh, 0o755);
   process.env["PATCHIX_GH_BIN"] = gh;
   try {
@@ -536,4 +537,38 @@ test("POST /api/campaigns/:c/run adds a key to the queue: a new key must have a 
     fleet.kill();
     await json("/api/campaigns/t/queue", { method: "DELETE" });
   }
+});
+
+test("POST .../check adds a check-only run to the queue; a branch with a job or with an entry gives 409", async () => {
+  const check = (key: string) => json(`/api/campaigns/t/branches/${key}/check`, { method: "POST" });
+  assert.equal((await check("nope")).status, 404);
+  const runner = await marker("run t baz");
+  const fleet = await marker("fleet t");
+  process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
+  const before = (await readFile(calls, "utf8")).length;
+  try {
+    await writeRun(ctx, "t", run("baz", "20260101-000005", "running", runner.pid ?? null));
+    const added = await check("foo");
+    assert.equal(added.status, 202);
+    assert.deepEqual(JobsViewSchema.parse(added.body), { jobs: [{ key: "baz", id: "20260101-000005", started: "2026-01-01T00:00:00Z" }], queue: ["foo"], check: ["foo"], fleet: true });
+    assert.match(await readFile(join(ctx.data, "state", "t", "queue", "foo"), "utf8"), /^\d{4}-[^\n]+Z\ncheck\n$/, "the second line of the entry is the mode");
+    assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "a check-only run has no question");
+    assert.match((await readFile(calls, "utf8")).slice(before), /^t fleet$/m, "the server starts the fleet");
+    assert.deepEqual(await check("foo"), { status: 409, body: { error: "the branch foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/branches/foo/run", { method: "POST" }), { status: 409, body: { error: "the branch foo is in the queue" } }, "the entry of a check-only run is an entry");
+    assert.deepEqual(await check("baz"), { status: 409, body: { error: "the branch baz has a job" } });
+
+    // A usual run in the queue: the Check button does not replace it.
+    assert.equal(JobsViewSchema.parse((await json("/api/campaigns/t/jobs/foo", { method: "DELETE" })).body).queue.length, 0);
+    assert.equal((await json("/api/campaigns/t/branches/foo/run", { method: "POST" })).status, 202);
+    assert.deepEqual(await check("foo"), { status: 409, body: { error: "the branch foo is in the queue" } });
+    const view = JobsViewSchema.parse((await json("/api/campaigns/t/jobs")).body);
+    assert.deepEqual([view.queue, view.check], [["foo"], []]);
+  } finally {
+    delete process.env["PATCHIX_TEST_FLEET_PID"];
+    runner.kill();
+    fleet.kill();
+    await json("/api/campaigns/t/queue", { method: "DELETE" });
+  }
+  await writeRun(ctx, "t", { ...run("baz", "20260101-000005", "failed", null), finished: "f" });
 });

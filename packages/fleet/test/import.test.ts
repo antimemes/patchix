@@ -122,7 +122,12 @@ before(async () => {
   await writeFile(join(docs, "stray.md"), "A description of a different change.\n");
   await writeFile(join(tmp, "work", "memelint.toml"), TOML);
   const gh = join(tmp, "gh.sh");
-  await writeFile(gh, `#!/bin/sh\necho '[{"number":577,"state":"OPEN","mergedAt":null,"url":"https://github.com/NixOS/nixpkgs/pull/577","headRefName":"t/foo"},{"number":12,"state":"CLOSED","mergedAt":null,"url":"u","headRefName":"t/foo"}]'\n`);
+  const fields = { title: "foo: use cacert bundle", body: "", labels: [], createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" };
+  const listed = [
+    { number: 577, state: "OPEN", mergedAt: null, url: "https://github.com/NixOS/nixpkgs/pull/577", headRefName: "t/foo", ...fields },
+    { number: 12, state: "CLOSED", mergedAt: null, url: "u", headRefName: "t/foo", ...fields },
+  ];
+  await writeFile(gh, `#!/bin/sh\necho '${JSON.stringify(listed)}'\n`);
   await chmod(gh, 0o755);
   process.env["PATCHIX_GH_BIN"] = gh;
 });

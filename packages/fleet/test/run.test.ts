@@ -573,3 +573,27 @@ test("the base update, the adopt and the source get a bounded number of commits"
   assert.deepEqual([...(source ?? [])], [["foo", ""], ["new.attr", "from the source"]]);
   assert.equal(git(join(ctx.data, ".cache", "worktrees", "t", "_base"), "rev-parse", "HEAD"), tip);
 });
+
+test("a check-only run starts the checks of the entries of the branch without the agent; a branch without a commit is unverified", async () => {
+  const cli = join(import.meta.dirname, "..", "src", "cli.ts");
+  const fork = git(repoPath(ctx), "remote", "get-url", "fork");
+  // The CLI uses `https://github.com`: thus it writes the SSH URL of the fork into the remote. This test writes the test URL again.
+  const out = execFileSync(process.execPath, [cli, "--root", ctx.root, "--data", ctx.data, "run", "t", "lib.a", "--check"], { encoding: "utf8" });
+  git(repoPath(ctx), "remote", "set-url", "fork", fork);
+  const [run] = await listRuns(ctx, "t", "lib.a");
+  assert.ok(run !== undefined);
+  assert.match(out, new RegExp(`^lib\\.a: ok \\(run ${run.id}, 1 commits, lint -\\)$`, "m"));
+  const tip = git(worktreePath(ctx, campaign, "lib.a"), "rev-parse", "HEAD");
+  assert.deepEqual([run.status, run.error, run.tags, run.question, run.head, run.commits, run.lint], ["ok", null, ["check"], null, tip, 1, null]);
+  assert.deepEqual([run.attrs, run.checks.map((c) => [c.attr, c.name, c.status])], [["lib.a", "lib.b"], [["lib.a", "harness", "pass"], ["lib.b", "harness", "pass"]]], "the entries of the branch");
+  const dir = runDir(ctx, "t", "lib.a", run.id);
+  for (const file of ["reply.md", "prompt.md", "description.md"]) assert.equal(await exists(join(dir, file)), false, `no ${file}`);
+  assert.match(await readFile(join(dir, "checks", "lib.b.harness.txt"), "utf8"), /^VERDICT lib\.b emudhra: FIXED /m);
+  assert.match(await readFile(join(dir, "log.txt"), "utf8"), /check-only run: no agent; the checks of lib\.a, lib\.b\n/);
+  const git2 = await branchGit(ctx, campaign, "lib.a");
+  assert.deepEqual(tipChecks(git2.runs, git2.tip, ["lib.a", "lib.b"]).map((t) => t.run?.id), [run.id, run.id], "the check-only run has the checks of the tip");
+
+  // The entry `done` has no branch: the run makes the branch from the base, and the branch has no commit.
+  const none = await startRun(ctx, "t", "done", undefined, "check");
+  assert.deepEqual([none.status, none.error, none.tags, none.attrs, none.checks, none.head], ["unverified", "no commit", ["check"], ["done"], [], null]);
+});

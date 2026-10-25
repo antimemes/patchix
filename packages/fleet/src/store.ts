@@ -382,14 +382,30 @@ export async function jobs(ctx: Ctx, c: string): Promise<JobStatus[]> {
 
 /**
  * `state/<campaign>/queue/`: one file for each branch that waits for a run. The name of the file is the key. Its
- * text is the time of the entry. The server adds and removes entries; the fleet removes them. No code writes a file
- * of the queue that is there: thus two processes cannot write the same file.
+ * first line is the time of the entry. The entry of a check-only run has a second line, `check`: see `QueueMode`. The
+ * server and the sync add and remove entries; the fleet removes them. No code writes a file of the queue that is
+ * there: thus two processes cannot write the same file.
  */
 export const queueDir = (ctx: Ctx, c: string) => join(stateDir(ctx, c), "queue");
 
-/** Adds the branch to the queue with the time `time`. An entry that is there does not change: it keeps its position. */
-export async function enqueue(ctx: Ctx, c: string, key: string, time = new Date().toISOString()): Promise<void> {
-  await createOnce(queueDir(ctx, c), check(key, KEY, "a branch key"), `${time}\n`);
+/**
+ * The run of an entry of the queue. `run`: a usual run, with the agent. `check`: a check-only run, without the agent
+ * (see `startRun`).
+ */
+export type QueueMode = "run" | "check";
+
+export interface QueueEntry {
+  key: string;
+  time: string;
+  mode: QueueMode;
+}
+
+/**
+ * Adds the branch to the queue with the time `time`. An entry that is there does not change: it keeps its position
+ * and its mode. Gives `false` when the queue had the branch.
+ */
+export async function enqueue(ctx: Ctx, c: string, key: string, time = new Date().toISOString(), mode: QueueMode = "run"): Promise<boolean> {
+  return createOnce(queueDir(ctx, c), check(key, KEY, "a branch key"), mode === "check" ? `${time}\ncheck\n` : `${time}\n`);
 }
 
 /**
@@ -407,16 +423,23 @@ export async function dequeue(ctx: Ctx, c: string, key: string): Promise<boolean
   return true;
 }
 
-/** The keys of the queue, in the sequence of the times of the entries. Entries with the same time are in the sequence of their names. */
-export async function listQueue(ctx: Ctx, c: string): Promise<string[]> {
+/** The entries of the queue, in the sequence of their times. Entries with the same time are in the sequence of their names. */
+export async function queueEntries(ctx: Ctx, c: string): Promise<QueueEntry[]> {
   const dir = queueDir(ctx, c);
-  const entries: { key: string; time: string }[] = [];
+  const entries: QueueEntry[] = [];
   for (const key of (await readdir(dir).catch(() => [])).filter((a) => KEY.test(a))) {
-    const time = await readText(join(dir, key));
-    if (time !== null) entries.push({ key, time: time.trim() });
+    const text = await readText(join(dir, key));
+    if (text === null) continue;
+    const [time = "", mode = ""] = text.split("\n").map((line) => line.trim());
+    entries.push({ key, time, mode: mode === "check" ? "check" : "run" });
   }
   entries.sort((a, b) => (a.time === b.time ? (a.key < b.key ? -1 : 1) : a.time < b.time ? -1 : 1));
-  return entries.map((e) => e.key);
+  return entries;
+}
+
+/** The keys of `queueEntries`. */
+export async function listQueue(ctx: Ctx, c: string): Promise<string[]> {
+  return (await queueEntries(ctx, c)).map((e) => e.key);
 }
 
 /** Removes each entry of the queue. */
@@ -429,16 +452,17 @@ export async function clearQueue(ctx: Ctx, c: string): Promise<void> {
  * branch directory: the next run of the branch gets it. Without a question (an empty string), it removes a
  * `question.md` without an entry, if there is one: the run is a usual run. A branch with a job or with an entry gives
  * an error with status 409. Thus one question waits for each branch, and a question does not change the run that
- * operates.
+ * operates. With the mode `check`, the entry is a check-only run: it has no question.
  */
-export function queueRun(ctx: Ctx, c: string, key: string, question = ""): Promise<void> {
+export function queueRun(ctx: Ctx, c: string, key: string, question = "", mode: QueueMode = "run"): Promise<void> {
   return serial(`queue:${c}`, async () => {
     if ((await branchJob(ctx, c, key)) !== null) fail(409, `the branch ${key} has a job`);
     if ((await listQueue(ctx, c)).includes(key)) fail(409, `the branch ${key} is in the queue`);
     const text = question.trim();
+    if (mode === "check" && text !== "") fail(400, "a check-only run has no question");
     if (text === "") await rm(questionFile(ctx, c, key), { force: true });
     else await writeAtomic(questionFile(ctx, c, key), `${text}\n`);
-    await enqueue(ctx, c, key);
+    await enqueue(ctx, c, key, undefined, mode);
   });
 }
 
@@ -480,7 +504,8 @@ export async function fleetAlive(ctx: Ctx, c: string): Promise<boolean> {
 }
 
 export async function jobsView(ctx: Ctx, c: string): Promise<JobsView> {
-  return { jobs: await jobs(ctx, c), queue: await listQueue(ctx, c), fleet: await fleetAlive(ctx, c) };
+  const queue = await queueEntries(ctx, c);
+  return { jobs: await jobs(ctx, c), queue: queue.map((e) => e.key), check: queue.filter((e) => e.mode === "check").map((e) => e.key), fleet: await fleetAlive(ctx, c) };
 }
 
 const prFile = (ctx: Ctx, c: string, key: string) => join(branchDir(ctx, c, key), "pr.yaml");
@@ -555,6 +580,15 @@ export async function campaignWords(ctx: Ctx, c: string): Promise<string[]> {
 
 /** The attributes of the entries that link to the branch `key`, in the sequence of the task list. */
 export const coversOf = (tasks: readonly Task[], key: string) => tasks.filter((t) => t.branch === key).map((t) => t.attr);
+
+/**
+ * The attributes of a check-only run of the branch `key`: the entries that link to the branch (see `coversOf`). A
+ * branch without entries gets its key, when the key is an attribute of the task list.
+ */
+export function checkAttrs(tasks: readonly Task[], key: string): string[] {
+  const covers = coversOf(tasks, key);
+  return covers.length > 0 || !tasks.some((t) => t.attr === key) ? covers : [key];
+}
 
 async function viewOf(ctx: Ctx, campaign: Campaign, key: string, covers: string[], refs: ReadonlyMap<string, string>): Promise<BranchView> {
   const runs = await listRuns(ctx, campaign.name, key);

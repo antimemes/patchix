@@ -94,11 +94,13 @@ export interface RunsSectionProps {
   branch: BranchView;
   /** The branch is in the queue: the list starts with the run that waits. */
   queued: boolean;
+  /** The run that waits is a check-only run. */
+  check?: boolean | undefined;
   /** The question for the run that waits. See `BranchDetail.question`. */
   question: string | null;
 }
 
-export function RunsSection({ campaign, branch, queued, question }: RunsSectionProps) {
+export function RunsSection({ campaign, branch, queued, check = false, question }: RunsSectionProps) {
   const [chosen, setChosen] = useState<string | null>(null);
   const [tab, setTab] = useState<RunTab>("reply");
   const run = branch.runs.find((r) => r.id === chosen) ?? branch.runs[0];
@@ -129,9 +131,16 @@ export function RunsSection({ campaign, branch, queued, question }: RunsSectionP
                     <td className="small muted">next</td>
                     <td>
                       <StatusBadge status="queued" />
+                      {check && <TagBadges tags={["check"]} />}
                     </td>
                     <td colSpan={3} className="small">
-                      {question === null ? <span className="muted">The run waits in the queue.</span> : <span className="run-question">{question}</span>}
+                      {check ? (
+                        <span className="muted">The check-only run waits in the queue: the checks of the tip, without the agent.</span>
+                      ) : question === null ? (
+                        <span className="muted">The run waits in the queue.</span>
+                      ) : (
+                        <span className="run-question">{question}</span>
+                      )}
                     </td>
                   </tr>
                 )}

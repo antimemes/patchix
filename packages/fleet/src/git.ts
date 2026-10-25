@@ -110,6 +110,45 @@ export async function fetchRef(ctx: Ctx, from: string, ref: string, depth: 1 | 2
   return (await revParse(repo, `refs/heads/${ref}`)) ?? fail(500, `the fetch of ${from} ${ref} gave no commit`);
 }
 
+/** A branch of a remote, from `git ls-remote`: see `remoteBranches`. */
+export interface RemoteBranch {
+  /** The name of the branch, for example `cacert/foo`. */
+  branch: string;
+  /** The name after the `branch_prefix`. It is not always a key: see `KEY`. */
+  key: string;
+  /** The commit of the branch on the remote. */
+  sha: string;
+}
+
+/**
+ * The branches `<branch_prefix>*` of `from`, a remote (`fork`) or a URL, from `git ls-remote --heads`. This function
+ * gets no commits. The repository of patchix must be there: see `cloneBase`.
+ */
+export async function remoteBranches(ctx: Ctx, campaign: Campaign, from: string): Promise<RemoteBranch[]> {
+  if (from.startsWith("-")) fail(400, `not a remote: ${from}`);
+  const out = await git(repoPath(ctx), ["ls-remote", "--heads", from, `refs/heads/${campaign.branch_prefix}*`]);
+  return out.split("\n").flatMap((line) => {
+    const [sha = "", ref = ""] = line.split("\t");
+    const branch = ref.replace(/^refs\/heads\//, "");
+    return sha === "" || !branch.startsWith(campaign.branch_prefix) ? [] : [{ branch, key: branch.slice(campaign.branch_prefix.length), sha }];
+  });
+}
+
+/**
+ * Gets the branch `b` of `from` into the repository of patchix with `fetchRef`: the tip and its parent. A branch that
+ * the repository has with the commit of `from` gets no fetch. Gives the tip, and `fetched` when a fetch
+ * occurred. Gives `null` when the repository has the branch with a different commit. That branch can have work that
+ * `from` does not have: this function does not change it. A branch at the tip of the `base_branch` has no work: the
+ * fetch replaces it, but not when the branch has a worktree.
+ */
+export async function takeBranch(ctx: Ctx, campaign: Campaign, from: string, b: RemoteBranch): Promise<{ tip: string; fetched: boolean } | null> {
+  const repo = repoPath(ctx);
+  const local = await revParse(repo, `refs/heads/${b.branch}`);
+  if (local === b.sha) return { tip: local, fetched: false };
+  if (local !== null && (local !== (await revParse(repo, `refs/heads/${campaign.base_branch}`)) || (await exists(worktreePath(ctx, campaign, b.key))))) return null;
+  return { tip: await fetchRef(ctx, from, b.branch, 2), fetched: true };
+}
+
 /** Gets the newest commit of the `base_branch` from `origin`. The worktrees that are there do not change. */
 export async function updateBase(ctx: Ctx, campaign: Campaign): Promise<string> {
   await cloneBase(ctx, campaign);
@@ -218,6 +257,11 @@ export async function isClean(cwd: string): Promise<boolean> {
 /** The first line of the commit message. */
 export async function subject(cwd: string, ref: string): Promise<string> {
   return (await git(cwd, ["log", "-1", "--format=%s", ref])).trim();
+}
+
+/** The time of the commit (`%ct`). */
+export async function commitTime(cwd: string, ref: string): Promise<Date> {
+  return new Date(Number((await git(cwd, ["log", "-1", "--format=%ct", ref])).trim()) * 1000);
 }
 
 /** A commit of `messages`: a `Commit` without its patch. */

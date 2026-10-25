@@ -8,7 +8,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { ATTR, GIT_URL, KEY, type Campaign, type CheckResult, type Run } from "@patchix/common";
 import { escapeRegex } from "./checks.ts";
-import { cloneBase, fetchRef, git, revParse, subject } from "./git.ts";
+import { cloneBase, remoteBranches, revParse, subject, takeBranch } from "./git.ts";
 import { forkOf, prList, type ListedPr } from "./github.ts";
 import { makeDraft, refreshPrs } from "./pr.ts";
 import { branchDir, campaignWords, checkFile, exists, fail, listRuns, newId, now, readCampaign, readPr, readSettings, readTasks, readText, runDir, tomlWords, updateTasks, writeRun, type Ctx } from "./store.ts";
@@ -26,7 +26,8 @@ export interface ImportResult {
   unmatched_files: string[];
 }
 
-interface Branch {
+/** A branch with one commit on its base: see `importRun`. */
+export interface ImportedBranch {
   branch: string;
   /** The key of the branch: the name after the `branch_prefix`. */
   key: string;
@@ -37,7 +38,7 @@ interface Branch {
 }
 
 /** A description of a person as `pr.md`. */
-interface Description {
+export interface Description {
   text: string;
   /** The output of the check, from the `console` code blocks. */
   output: string | null;
@@ -153,7 +154,7 @@ export function scopeWords(toml: string, file: string): string[] {
  * a file that no other task has. That file must have the attribute in its text. An example is `ruby-gems.md`, with
  * `rubyPackages.excon` in its reviewer command.
  */
-async function findFiles(dir: string, prefix: string, found: readonly Branch[]): Promise<{ files: Map<string, string>; unmatched: string[] }> {
+async function findFiles(dir: string, prefix: string, found: readonly ImportedBranch[]): Promise<{ files: Map<string, string>; unmatched: string[] }> {
   const names = (await readdir(dir)).filter((n) => n.endsWith(".md")).sort();
   const files = new Map<string, string>();
   for (const b of found) {
@@ -180,10 +181,11 @@ async function findFiles(dir: string, prefix: string, found: readonly Branch[]):
 /**
  * Writes the run of the branch. The run has one commit, the status `ok`, a log of one line and the tag `imported`. Its
  * `base` is the parent of the commit, its `head` is the tip, and its attributes are the attributes of the branch. Its
- * model is the model of the settings. When the description has the output of a check, the run has the checks of the
- * tip for each attribute, with that output: see `tipChecks`.
+ * model is the model of the settings. Its id, its start and its end are the time `start`. `url` is the source of the
+ * branch, for the log. When the description has the output of a check, the run has the checks of the tip for each
+ * attribute, with that output: see `tipChecks`. The sync gives no description: see `sync`.
  */
-async function importRun(ctx: Ctx, campaign: Campaign, b: Branch, url: string, doc: Description | null, start: Date): Promise<Run> {
+export async function importRun(ctx: Ctx, campaign: Campaign, b: ImportedBranch, url: string, doc: Description | null, start: Date): Promise<Run> {
   const { model } = await readSettings(ctx);
   const id = await newId(join(branchDir(ctx, campaign.name, b.key), "runs"), start);
   const dir = runDir(ctx, campaign.name, b.key, id);
@@ -202,7 +204,7 @@ async function importRun(ctx: Ctx, campaign: Campaign, b: Branch, url: string, d
       }
     }
   }
-  const time = now();
+  const time = start.toISOString().replace(/\.\d+Z$/, "Z");
   const run: Run = { id, key: b.key, attrs: b.attrs, tags: ["imported"], question: null, started: time, finished: time, status: "ok", model, pid: null, base: b.base, head: b.tip, commits: 1, checks, lint: null, error: null };
   await writeRun(ctx, campaign.name, run);
   return run;
@@ -210,12 +212,12 @@ async function importRun(ctx: Ctx, campaign: Campaign, b: Branch, url: string, d
 
 /**
  * Imports the branches `<branch_prefix>*` of the repository at `url`. Each branch gets one fetch with depth 2: the tip
- * and its parent, the base. A branch that the repository of patchix has with the same commit gets no fetch. The
- * entries of a branch are the attributes of `branchAttrs`. Also, an entry is an entry of the branch when its issue
- * entry has the number of the pull request of the branch. Each entry without a branch links to the branch. A branch
- * that has a run with the commit of its tip gets no new run. With `descriptions`, each branch with a description file
- * and no draft gets a draft. At the end, `refreshPrs` gives each draft the number and the state of the pull request of
- * the fork for its branch.
+ * and its parent, the base. A branch that the repository of patchix has with the same commit gets no fetch: see
+ * `takeBranch`. The entries of a branch are the attributes of `branchAttrs`. Also, an entry is an entry of the branch
+ * when its issue entry has the number of the pull request of the branch. Each entry without a branch links to the
+ * branch. A branch that has a run with the commit of its tip gets no new run. With `descriptions`, each branch with a
+ * description file and no draft gets a draft. At the end, `refreshPrs` gives each draft the number and the state of
+ * the pull request of the fork for its branch.
  */
 export async function importBranches(ctx: Ctx, c: string, url: string, descriptions?: string): Promise<ImportResult> {
   if (!GIT_URL.test(url)) fail(400, `not an https:// or file:// URL: ${url}`);
@@ -226,20 +228,16 @@ export async function importBranches(ctx: Ctx, c: string, url: string, descripti
   const prs = new Map<string, ListedPr>();
   for (const pr of listed) if (!prs.has(pr.headRefName)) prs.set(pr.headRefName, pr);
   const repo = await cloneBase(ctx, campaign);
-  const base = await revParse(repo, `refs/heads/${campaign.base_branch}`);
-  const found: Branch[] = [];
+  const found: ImportedBranch[] = [];
   const unmatched_branches: string[] = [];
-  for (const line of (await git(repo, ["ls-remote", "--heads", url, `refs/heads/${campaign.branch_prefix}*`])).split("\n")) {
-    const [sha = "", ref = ""] = line.split("\t");
-    const branch = ref.replace(/^refs\/heads\//, "");
-    if (sha === "" || !branch.startsWith(campaign.branch_prefix)) continue;
-    const key = branch.slice(campaign.branch_prefix.length);
-    const local = await revParse(repo, `refs/heads/${branch}`);
-    if (!KEY.test(key) || (local !== null && local !== sha && local !== base)) {
+  for (const remote of await remoteBranches(ctx, campaign, url)) {
+    const { branch, key } = remote;
+    const taken = KEY.test(key) ? await takeBranch(ctx, campaign, url, remote) : null;
+    if (taken === null) {
       unmatched_branches.push(branch);
       continue;
     }
-    const tip = local === sha ? local : await fetchRef(ctx, url, branch, 2);
+    const { tip } = taken;
     const number = prs.get(branch)?.number;
     const byPr = tasks.filter((t) => number !== undefined && t.pr === number).map((t) => t.attr);
     const attrs = [...new Set([...branchAttrs(campaign.branch_prefix, branch, await subject(repo, tip)).filter((a) => known.has(a)), ...byPr])];

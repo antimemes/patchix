@@ -2,7 +2,8 @@
  * The fleet with a test script as `zellij`. The script records its arguments and gives the names of the tabs. For
  * the tab of a run, it starts a process with the words `run t <key>`. Then it moves the question of the branch into
  * the run directory and writes a `running` record with the `pid` of that process, as a runner does. For the keys
- * `none` and `lost`, it writes no record: the run does not start.
+ * `none` and `lost`, it writes no record: the run does not start. For a tab with `--check` in its layout, it also
+ * records the line `check <tab>`.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
-import { dequeue, enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, questionFile, queueRun, readFleet, runDir, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
+import { dequeue, enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, queueEntries, questionFile, queueRun, readFleet, runDir, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
 
 let tmp = "";
 let calls = "";
@@ -34,6 +35,7 @@ before(async () => {
   const script = `#!/bin/sh
 [ "$4" = query-tab-names ] && exec sed -n 's/^-s patchix action new-tab --name //p' ${calls}
 printf '%s\\n' "$1 $2 $3 $4 $5 $6" >> ${calls}
+case "$8" in *'"--check"'*) printf 'check %s\\n' "$6" >> ${calls};; esac
 [ "$3" = action ] || exit 0
 key=\${6#t/}
 case "$key" in none|lost) exit 0;; esac
@@ -161,4 +163,21 @@ test("the fleet removes an entry without a branch directory that is not an entry
   const [run] = await listRuns(ctx, "t", "free-text");
   assert.equal(await readFile(join(runDir(ctx, "t", "free-text", run?.id ?? ""), "question.md"), "utf8"), "Add one setup hook.\n");
   await finish("free-text");
+});
+
+test("the fleet starts a check-only run of the queue with --check, and a check-only run that does not start gets the tag check", async () => {
+  const seen = (await tabs()).length;
+  const start = Date.now();
+  await enqueue(ctx, "t", "c", new Date(start).toISOString(), "check");
+  await enqueue(ctx, "t", "none", new Date(start + 1).toISOString(), "check");
+  assert.equal(await readFile(join(ctx.data, "state", "t", "queue", "c"), "utf8"), `${new Date(start).toISOString()}\ncheck\n`);
+  assert.deepEqual((await queueEntries(ctx, "t")).map((e) => [e.key, e.mode]), [["c", "check"], ["none", "check"]]);
+  await fleetTick(ctx, "t", opts);
+  assert.deepEqual((await tabs()).slice(seen), ["-s patchix action new-tab --name t/c", "-s patchix action new-tab --name t/none"]);
+  assert.match(await readFile(calls, "utf8"), /^check t\/c$/m, "the command of the tab has --check");
+  assert.ok(lines.includes("c: start the check-only run"), lines.join("\n"));
+  assert.deepEqual(await listQueue(ctx, "t"), []);
+  const [failed] = await listRuns(ctx, "t", "none");
+  assert.deepEqual([failed?.status, failed?.tags, failed?.question], ["failed", ["check"], null]);
+  await finish("c");
 });

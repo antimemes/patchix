@@ -290,3 +290,20 @@ export async function refreshPrs(ctx: Ctx, campaign: Campaign, listed?: readonly
   }
   return changed;
 }
+
+/**
+ * Makes the draft of the branch from its pull request `pr` on GitHub, when the branch has no draft. `pr.yaml` gets the
+ * number, the URL, the state, the times, the title and the labels of the pull request. `pushed` is the commit of the
+ * branch on the fork, and `confirmed` is the time that the pull request was made. `pr.md` is the description of the
+ * pull request as it is: the text of a person, without marks. Gives `false` when the branch has a draft: then the
+ * draft does not change.
+ */
+export function draftFromPr(ctx: Ctx, c: string, key: string, pr: ListedPr, pushed: string): Promise<boolean> {
+  return serial(lock(c, key), async () => {
+    if ((await readPr(ctx, c, key)) !== null) return false;
+    await writeDraft(ctx, c, key, pr.body);
+    const labels = pr.labels.map((l) => l.name);
+    await writePr(ctx, c, key, { title: pr.title, labels, words: [], number: pr.number, url: pr.url, created: pr.createdAt, pushed, updated: pr.updatedAt, state: STATES[pr.state], merged: pr.mergedAt, confirmed: pr.createdAt });
+    return true;
+  });
+}

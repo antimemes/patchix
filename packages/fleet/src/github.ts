@@ -76,12 +76,21 @@ const ListedPrSchema = z.object({
   mergedAt: z.string().nullable(),
   url: z.string(),
   headRefName: z.string(),
+  /** The fields of a draft from the pull request: see `draftFromPr`. */
+  title: z.string().min(1),
+  body: z.string(),
+  labels: z.array(z.object({ name: z.string().min(1) })),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 export type ListedPr = z.infer<typeof ListedPrSchema>;
 
+/** The fields of `ListedPrSchema`, for `gh pr list --json`. */
+const LISTED_FIELDS = Object.keys(ListedPrSchema.shape).join(",");
+
 /** The pull requests that the GitHub user `author` made in the repository, open and closed, the newest first: 300 or less. */
 export async function prList(repo: string, author: string): Promise<ListedPr[]> {
-  const out = await gh(["pr", "list", "--repo", repo, "--author", author, "--state", "all", "--limit", "300", "--json", "number,state,mergedAt,url,headRefName"]);
+  const out = await gh(["pr", "list", "--repo", repo, "--author", author, "--state", "all", "--limit", "300", "--json", LISTED_FIELDS]);
   return ListedPrSchema.array().parse(JSON.parse(out));
 }
 

@@ -24,6 +24,7 @@ import {
   type Label,
   type PublishError,
   type SettingsView,
+  type SyncView,
   type TaskState,
   type Worktree,
 } from "@patchix/common";
@@ -149,8 +150,8 @@ async function settingsView(ctx: fleet.Ctx): Promise<SettingsView> {
 }
 
 /** Adds the branch to the queue for one run, with the question, and starts the fleet. See `queueRun`. */
-async function queue(ctx: fleet.Ctx, c: string, key: string, question: string) {
-  await fleet.queueRun(ctx, c, key, question);
+async function queue(ctx: fleet.Ctx, c: string, key: string, question: string, mode: fleet.QueueMode = "run") {
+  await fleet.queueRun(ctx, c, key, question, mode);
   await fleet.ensureFleet(ctx, c);
   return fleet.jobsView(ctx, c);
 }
@@ -170,7 +171,9 @@ export function app(ctx: fleet.Ctx): Hono {
   api.post("/api/campaigns/:c/sync", async (c) => {
     const result = await fleet.sync(ctx, p(c).c);
     for (const w of result.warnings) console.warn(`sync ${p(c).c}: ${w}`);
-    return c.json(await campaignView(ctx, p(c).c));
+    // The sync adds check-only runs to the queue: the fleet starts them.
+    if (result.queued > 0) await fleet.ensureFleet(ctx, p(c).c);
+    return c.json({ ...(await campaignView(ctx, p(c).c)), result } satisfies SyncView);
   });
 
   api.post("/api/campaigns/:c/refresh", async (c) => {
@@ -275,6 +278,12 @@ export function app(ctx: fleet.Ctx): Hono {
     const { c: name, key } = p(c);
     await fleet.needBranch(ctx, await fleet.readCampaign(ctx, name), key);
     return c.json(await queue(ctx, name, key, question), 202);
+  });
+  // A check-only run of one branch: the checks of the tip, without the agent.
+  api.post(`${branch}/check`, async (c) => {
+    const { c: name, key } = p(c);
+    await fleet.needBranch(ctx, await fleet.readCampaign(ctx, name), key);
+    return c.json(await queue(ctx, name, key, "", "check"), 202);
   });
   // A run on a key of the body. A key that is not there makes a new branch: its text is the work of the run.
   api.post("/api/campaigns/:c/run", async (c) => {

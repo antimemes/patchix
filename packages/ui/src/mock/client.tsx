@@ -16,6 +16,8 @@ export interface MockCampaign {
   jobs?: JobStatus[];
   /** The keys of the queue, the first entry first. */
   queue?: string[];
+  /** The keys of `queue` that wait for a check-only run. */
+  check?: string[];
   /** A fleet operates. The default: the queue has entries. */
   fleet?: boolean;
   /** The question of each branch for its next run. See `BranchDetail.question`. */
@@ -59,6 +61,7 @@ interface State {
   branches: BranchView[];
   jobs: JobStatus[];
   queue: string[];
+  check: Set<string>;
   fleet: boolean;
   questions: Map<string, string>;
   drafts: Map<string, string>;
@@ -81,6 +84,7 @@ export function mockClient(options: MockOptions): Client {
       branches: (m.branches ?? []).map((b) => structuredClone(b)),
       jobs: [...(m.jobs ?? [])],
       queue: [...(m.queue ?? [])],
+      check: new Set(m.check ?? []),
       fleet: m.fleet ?? (m.queue ?? []).length > 0,
       questions: new Map(Object.entries(m.questions ?? {})),
       drafts,
@@ -123,7 +127,7 @@ export function mockClient(options: MockOptions): Client {
   };
 
   const changed = (s: State, key: string | null) => emit({ type: "campaign", campaign: s.campaign.name, key });
-  const jobsView = (s: State): JobsView => ({ jobs: s.jobs, queue: s.queue, fleet: s.fleet });
+  const jobsView = (s: State): JobsView => ({ jobs: s.jobs, queue: s.queue, check: s.queue.filter((k) => s.check.has(k)), fleet: s.fleet });
   const jobsChanged = (s: State) => emit({ type: "jobs", campaign: s.campaign.name, ...structuredClone(jobsView(s)) });
 
   /** As the server: the entries and the state of each branch, and the state of each entry. */
@@ -168,11 +172,12 @@ export function mockClient(options: MockOptions): Client {
   /** The commits of the branch: none without a tip or without a run with a base, as the server. */
   const commitsOf = (b: BranchView) => (b.head === null || !b.runs.some((r) => r.base !== "") ? [] : f.commits(b.key, b.head));
 
-  /** As the runner: the run starts, and it gets the question of the branch. */
+  /** As the runner: the run starts, and it gets the question of the branch. A check-only run has the tag `check` and no question. */
   function launch(s: State, key: string) {
     const b = branchOf(s, key);
-    const run = { ...f.runningRun(key, 0), question: s.questions.get(key) ?? null };
-    s.questions.delete(key);
+    const check = s.check.delete(key);
+    const run = check ? { ...f.runningRun(key, 0), tags: ["check"], question: null } : { ...f.runningRun(key, 0), question: s.questions.get(key) ?? null };
+    if (!check) s.questions.delete(key);
     b.runs.unshift(run);
     s.jobs.push({ key, id: run.id, started: run.started });
   }
@@ -193,17 +198,19 @@ export function mockClient(options: MockOptions): Client {
   /** As `dequeue` of the server: it removes the entry and the question of the branch. */
   const remove = (s: State, key: string) => {
     s.queue = s.queue.filter((x) => x !== key);
+    s.check.delete(key);
     s.questions.delete(key);
     changed(s, key);
   };
   /** As `queueRun` of the server: the branch goes into the queue, and a question waits for the next run of the branch. */
-  function queueRun(s: State, key: string, text: string) {
+  function queueRun(s: State, key: string, text: string, check = false) {
     if (s.jobs.some((j) => j.key === key)) fail(409, `the branch ${key} has a job`);
     if (s.queue.includes(key)) fail(409, `the branch ${key} is in the queue`);
     const question = text.trim();
     if (question === "") s.questions.delete(key);
     else s.questions.set(key, question);
     s.queue.push(key);
+    if (check) s.check.add(key);
     s.fleet = true;
     jobsChanged(s);
     changed(s, key);
@@ -217,11 +224,12 @@ export function mockClient(options: MockOptions): Client {
         [...states.values()].map((s) => ({ name: s.campaign.name, title: s.campaign.title, issue: s.campaign.issue, synced: s.synced, counts: f.count(views(s).tasks), jobs: s.jobs.length, queued: s.queue.length })),
       ),
     campaign: (c) => answer("campaign", () => view(state(c))),
+    // As the server: the numbers of the sync. The mock has no fork: each number of the fork is 0.
     sync: (c) =>
       answer("sync", () => {
         const s = state(c);
         s.synced = new Date().toISOString();
-        return view(s);
+        return { ...view(s), result: { tasks: s.tasks.length, prs: [], listed: 0, fetched: 0, made: 0, drafts: 0, links: 0, queued: 0, warnings: [] } };
       }),
     refresh: (c) => answer("refresh", () => view(state(c))),
     fetchBase: (c) => answer("fetchBase", () => view(state(c))),
@@ -293,6 +301,12 @@ export function mockClient(options: MockOptions): Client {
         const s = state(c);
         branchOf(s, key);
         return queueRun(s, key, input.question ?? "");
+      }),
+    startCheck: (c, key) =>
+      answer("startCheck", () => {
+        const s = state(c);
+        branchOf(s, key);
+        return queueRun(s, key, "", true);
       }),
     startFreeRun: (c, input) =>
       answer("startFreeRun", () => {

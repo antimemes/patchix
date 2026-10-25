@@ -59,12 +59,12 @@ tasks:
       - node packages/server/src/main.ts --port {{.PORT}}
 
   sync:
-    desc: "Read the issue of a campaign: task sync -- cacert"
+    desc: "Make the state of a campaign agree with GitHub (the issue, the pull requests and the branches of the fork): task sync -- cacert"
     cmds:
       - node packages/fleet/src/cli.ts sync {{.CLI_ARGS}}
 
   run:
-    desc: "Start one run: task run -- cacert <key>"
+    desc: "Start one run, or a check-only run with --check: task run -- cacert <key> [--check]"
     cmds:
       - node packages/fleet/src/cli.ts run {{.CLI_ARGS}}
 
@@ -84,7 +84,7 @@ tasks:
       - node packages/fleet/src/cli.ts base {{.CLI_ARGS}}
 
   adopt:
-    desc: "Adopt a branch of the fork: task adopt -- cacert <key>"
+    desc: "Adopt a branch of the fork, with its directory, its draft and its links: task adopt -- cacert <key>"
     cmds:
       - node packages/fleet/src/cli.ts adopt {{.CLI_ARGS}}
 

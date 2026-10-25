@@ -3,7 +3,8 @@
  * `claude -p` and examines the result: the commits, the worktree, `description.md`, `attrs.txt`, memelint and the
  * checks. The prompt goes into `prompt.md` of the run directory, and the `stdout` of `claude` goes into `reply.md`.
  * `log.txt` gets the lines of the runner and the output of `claude`. The worktree stays after the run. The runner
- * writes its `pid` into `run.yaml` while the run operates.
+ * writes its `pid` into `run.yaml` while the run operates. A check-only run does not start `claude`: it starts only
+ * the checks of the tip (see `startRun`).
  */
 import { createWriteStream, type WriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -14,7 +15,29 @@ import { claudeBin, runClaude, TOOLS } from "./claude.ts";
 import { addWorktree, baseTip, branchName, isClean, revParse } from "./git.ts";
 import { lintText } from "./lint.ts";
 import { describe, type StartResult } from "./proc.ts";
-import { branchDir, branchJob, campaignDir, campaignState, coversOf, fail, listRuns, message, newId, now, readCampaign, readSettings, readTasks, readText, requestLink, runDir, takeQuestion, writeRun, type Ctx } from "./store.ts";
+import {
+  branchDir,
+  branchJob,
+  campaignDir,
+  campaignState,
+  checkAttrs,
+  coversOf,
+  fail,
+  listRuns,
+  message,
+  newId,
+  now,
+  readCampaign,
+  readSettings,
+  readTasks,
+  readText,
+  requestLink,
+  runDir,
+  takeQuestion,
+  writeRun,
+  type Ctx,
+  type QueueMode,
+} from "./store.ts";
 
 /** When `claude --continue` stops with an error in this time, the worktree has no session of `claude`: the runner starts `claude` again with the full prompt. */
 const FAST_MS = 30_000;
@@ -77,6 +100,8 @@ interface Work {
   tasks: readonly TaskView[];
   /** The previous runs of the branch, the newest first. */
   earlier: readonly Run[];
+  /** A check-only run: see `startRun`. */
+  check: boolean;
 }
 
 /**
@@ -146,8 +171,14 @@ async function buildPrompt(ctx: Ctx, campaign: Campaign, work: Work, run: Run, w
 /**
  * Does one run of the branch `key` with the model of the settings, and gives its last record. The run gets the
  * question of the branch: see `takeQuestion`. A branch that has a job at this time gets an error with status 409.
+ *
+ * With the mode `check`, the run is a check-only run with the tag `check`. It does not start `claude` and does not
+ * get the question of the branch. Thus it has no prompt, no reply and no description. It declares the attributes of
+ * `checkAttrs`, and starts the checks for each of them on the tip of the branch. Its status has the conditions of a
+ * usual run (see `RunSchema.status`). For example, a branch without commits after the base is `unverified` with the
+ * error "no commit".
  */
-export async function startRun(ctx: Ctx, name: string, key: string, signal?: AbortSignal): Promise<Run> {
+export async function startRun(ctx: Ctx, name: string, key: string, signal?: AbortSignal, mode: QueueMode = "run"): Promise<Run> {
   const campaign = await readCampaign(ctx, name);
   const { model } = await readSettings(ctx);
   const { tasks } = await campaignState(ctx, name);
@@ -156,13 +187,14 @@ export async function startRun(ctx: Ctx, name: string, key: string, signal?: Abo
   const earlier = await listRuns(ctx, name, key);
   const id = await newId(join(branchDir(ctx, name, key), "runs"));
   const dir = runDir(ctx, name, key, id);
-  const question = await takeQuestion(ctx, name, key, id);
-  const run: Run = { id, key, attrs: [], tags: [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
+  const check = mode === "check";
+  const question = check ? null : await takeQuestion(ctx, name, key, id);
+  const run: Run = { id, key, attrs: [], tags: check ? ["check"] : [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
   await writeRun(ctx, name, run);
   const out = createWriteStream(join(dir, "log.txt"), { flags: "a" });
   out.on("error", () => undefined);
   try {
-    return await execute(ctx, campaign, { key, entry: tasks.find((t) => t.attr === key), tasks, earlier }, run, dir, out, signal);
+    return await execute(ctx, campaign, { key, entry: tasks.find((t) => t.attr === key), tasks, earlier, check }, run, dir, out, signal);
   } finally {
     await new Promise<void>((r) => out.end(r));
   }
@@ -188,50 +220,59 @@ async function execute(ctx: Ctx, campaign: Campaign, work: Work, first: Run, dir
     run = { ...run, base };
     await writeRun(ctx, campaign.name, run);
 
-    const once = async (cont: boolean): Promise<StartResult> => {
-      const prompt = await buildPrompt(ctx, campaign, work, run, wt.path, dir, !cont);
-      await writeFile(join(dir, "prompt.md"), prompt);
-      log(`${claudeBin()} -p <prompt.md>${cont ? " --continue" : ""} --model ${run.model} --allowedTools ${TOOLS.join(" ")}`);
-      const reply = createWriteStream(join(dir, "reply.md"));
-      reply.on("error", () => undefined);
-      try {
-        return await runClaude({ cwd: wt.path, prompt, model: run.model, dir, out, stdout: reply, timeoutMs: campaign.timeout_minutes * 60_000, signal, cont });
-      } finally {
-        await new Promise<void>((r) => reply.end(r));
-      }
-    };
     const start = await revParse(wt.path, "HEAD");
-    // A run with a question continues the newest session of `claude` in the worktree, when the branch was there before the run.
-    const resume = run.question !== null && wt.base === null && earlier.length > 0;
-    const began = Date.now();
-    let result = await once(resume);
-    if (resume && !result.stopped && result.code !== 0 && Date.now() - began < FAST_MS) {
-      log(`claude --continue: ${describe(result)}; again without --continue, with the full prompt`);
-      result = await once(false);
-    }
-    log(`claude: ${describe(result)}`);
-    const completed = !result.stopped && !result.timedOut && result.code === 0;
-    if (!result.stopped && !completed) errors.push(`claude: ${describe(result)}`);
+    let completed = true;
+    let declared: string[];
+    if (work.check) {
+      // The entries of the branch: each has a state, and a done entry also gets its checks, for the state of the branch (see `branchState`).
+      declared = checkAttrs(work.tasks, key);
+      known = declared;
+      log(`check-only run: no agent; the checks of ${declared.join(", ") || "no attribute"}`);
+    } else {
+      const once = async (cont: boolean): Promise<StartResult> => {
+        const prompt = await buildPrompt(ctx, campaign, work, run, wt.path, dir, !cont);
+        await writeFile(join(dir, "prompt.md"), prompt);
+        log(`${claudeBin()} -p <prompt.md>${cont ? " --continue" : ""} --model ${run.model} --allowedTools ${TOOLS.join(" ")}`);
+        const reply = createWriteStream(join(dir, "reply.md"));
+        reply.on("error", () => undefined);
+        try {
+          return await runClaude({ cwd: wt.path, prompt, model: run.model, dir, out, stdout: reply, timeoutMs: campaign.timeout_minutes * 60_000, signal, cont });
+        } finally {
+          await new Promise<void>((r) => reply.end(r));
+        }
+      };
+      // A run with a question continues the newest session of `claude` in the worktree, when the branch was there before the run.
+      const resume = run.question !== null && wt.base === null && earlier.length > 0;
+      const began = Date.now();
+      let result = await once(resume);
+      if (resume && !result.stopped && result.code !== 0 && Date.now() - began < FAST_MS) {
+        log(`claude --continue: ${describe(result)}; again without --continue, with the full prompt`);
+        result = await once(false);
+      }
+      log(`claude: ${describe(result)}`);
+      completed = !result.stopped && !result.timedOut && result.code === 0;
+      if (!result.stopped && !completed) errors.push(`claude: ${describe(result)}`);
 
-    // The attributes of `attrs.txt`. Without the file: the key, when it is an attribute of the task list.
-    const bad: string[] = [];
-    const declared = parseAttrs(await readText(join(dir, "attrs.txt")), bad) ?? (work.entry === undefined ? [] : [key]);
-    for (const line of bad) log(`attrs.txt: ${JSON.stringify(line.slice(0, 80))} is not an attribute`);
-    const states = new Map(work.tasks.map((t) => [t.attr, t.state]));
-    for (const a of declared) {
-      const state = states.get(a);
-      if (state === undefined) log(`attrs.txt: ${a} is not an attribute of the task list: no checks`);
-      else if (DONE.includes(state)) log(`attrs.txt: ${a} is done (${state}): no checks`);
+      // The attributes of `attrs.txt`. Without the file: the key, when it is an attribute of the task list.
+      const bad: string[] = [];
+      declared = parseAttrs(await readText(join(dir, "attrs.txt")), bad) ?? (work.entry === undefined ? [] : [key]);
+      for (const line of bad) log(`attrs.txt: ${JSON.stringify(line.slice(0, 80))} is not an attribute`);
+      const states = new Map(work.tasks.map((t) => [t.attr, t.state]));
+      for (const a of declared) {
+        const state = states.get(a);
+        if (state === undefined) log(`attrs.txt: ${a} is not an attribute of the task list: no checks`);
+        else if (DONE.includes(state)) log(`attrs.txt: ${a} is done (${state}): no checks`);
+      }
+      known = declared.filter((a) => {
+        const state = states.get(a);
+        return state !== undefined && !DONE.includes(state);
+      });
     }
-    known = declared.filter((a) => {
-      const state = states.get(a);
-      return state !== undefined && !DONE.includes(state);
-    });
     run = { ...run, attrs: declared };
 
     const tip = await revParse(wt.path, "HEAD");
     const clean = await isClean(wt.path);
-    const description = await readText(join(dir, "description.md"));
+    const description = work.check ? null : await readText(join(dir, "description.md"));
     if (description !== null) run = { ...run, lint: await lint(ctx, campaign.name, description, dir, log) };
     // The agent made no commit in this run and wrote the heading of the prompts: it found no small fix.
     wontfix = completed && tip === start && clean && description !== null && isNoFix(description);
@@ -240,7 +281,7 @@ async function execute(ctx: Ctx, campaign: Campaign, work: Work, first: Run, dir
     if (!clean) problems.push("the worktree has changes without a commit");
     else if (head === null && !wontfix) problems.push("no commit");
     // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
-    if (description === null && run.question === null) problems.push("no description.md");
+    if (description === null && run.question === null && !work.check) problems.push("no description.md");
 
     // The checks examine the commit, one time for each declared attribute. With a problem of the work, there is no commit to examine, or the worktree has changes that the commit does not have.
     // A run with a question that did not move the tip does not start the checks of an attribute when a previous run has them. See `tipChecks`.

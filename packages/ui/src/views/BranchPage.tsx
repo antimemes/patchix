@@ -75,10 +75,11 @@ export function BranchPage({ campaign: c, branch: key }: { campaign: string; bra
       if (signal.key === null || signal.key === key) reloadDetail();
       reloadView();
     } else {
-      jobs.replace({ jobs: signal.jobs, queue: signal.queue, fleet: signal.fleet });
+      jobs.replace({ jobs: signal.jobs, queue: signal.queue, check: signal.check, fleet: signal.fleet });
     }
   });
   const place = jobs.data?.queue.indexOf(key) ?? -1;
+  const checkOnly = jobs.data?.check.includes(key) ?? false;
 
   if (detail.data === null) {
     return detail.error !== null ? <Notice tone="error">{detail.error}</Notice> : <Progress value={null} label="Loading the branch" />;
@@ -93,6 +94,11 @@ export function BranchPage({ campaign: c, branch: key }: { campaign: string; bra
         {place >= 0 && (
           <Badge tone="blue" dim>
             queued
+          </Badge>
+        )}
+        {place >= 0 && checkOnly && (
+          <Badge tone="muted" title="A check-only run: the checks of the tip, without the agent.">
+            check
           </Badge>
         )}
         {branch.pr_meta?.number != null && <PrCell meta={branch.pr_meta} repo={campaign.issue.repo} />}
@@ -133,7 +139,7 @@ export function BranchPage({ campaign: c, branch: key }: { campaign: string; bra
                 </section>
                 <CommitProblemsNotice problems={detail.data.commit_problems} />
                 <BranchSection campaign={campaign} branch={branch} clean={detail.data.clean} />
-                <RunsSection campaign={campaign} branch={branch} queued={place >= 0} question={detail.data.question} />
+                <RunsSection campaign={campaign} branch={branch} queued={place >= 0} check={checkOnly} question={detail.data.question} />
               </div>
             ),
           },

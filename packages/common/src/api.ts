@@ -9,9 +9,16 @@
  * The routes are:
  * - `GET /api/campaigns` gives `CampaignSummary[]`.
  * - `GET /api/campaigns/:c` gives `CampaignView`: the entries of the task list and the branches.
- * - `POST /api/campaigns/:c/sync` reads the tracking issue (and the `source` command) again, then the pull requests
- *   as `POST .../refresh` does, and gives `CampaignView`. An entry without a branch, with the number of the pull
- *   request of a draft in its issue line, gets the link to that branch. See `sync` in the fleet package.
+ * - `POST /api/campaigns/:c/sync` makes the state agree with GitHub and gives `SyncView`. It reads the tracking issue
+ *   (and the `source` command) again. Then it reads the pull requests as `POST .../refresh` does. Then it reads the
+ *   branches `<branch_prefix>*` of the fork with `git ls-remote`. It gets each branch that the repository of patchix
+ *   does not have, with a depth of 2 commits. A branch of the fork without a directory gets a directory with one run
+ *   with the tag `imported`. A branch with an open or merged pull request and without a draft gets a draft from the
+ *   pull request. An entry without a branch gets a link to the branch of its attribute, when the fork has that
+ *   branch. If not, it gets a link to the branch of the pull request number of its issue line, when a draft has that
+ *   number. A branch of the fork without a pull request and without checks of the tip gets a check-only run in the
+ *   queue (see `POST .../branches/:key/check`). Then the server starts the fleet. `SyncView.result` gives the numbers
+ *   of each step. See `sync` in the fleet package.
  * - `POST /api/campaigns/:c/refresh` reads the pull requests of the fork on GitHub (one `gh pr list`) and gives
  *   `CampaignView`. It writes the `state`, `merged` and `url` of each draft with the number of a pull request of the list.
  *   A draft without a number gets the number of the pull request of its branch. See `refreshPrs`.
@@ -48,6 +55,10 @@
  *   is there: the run is a usual run. A request without a body is a request without a question. Then it starts the
  *   fleet as `POST .../jobs` does, and gives `JobsView` with status 202. A branch with a job or with an entry in the
  *   queue gives 409: the person starts the run after the job. See `queueRun` in the fleet package.
+ * - `POST /api/campaigns/:c/branches/:key/check` adds the branch to the queue for one check-only run, and starts the
+ *   fleet. It gives `JobsView` with status 202. A check-only run does not start the agent. It starts the checks of the
+ *   entries of the branch on its tip: see `startRun` in the fleet package. A branch with a job or with an entry in the
+ *   queue gives 409.
  * - `POST /api/campaigns/:c/run` with a `FreeRunInput` body does the same for the key of the body. A key that is not
  *   there is a free-text run: the text is necessary, and the runner makes the branch from the base. The key of an entry
  *   or of a branch that is there gets a usual run, with the text as the question.
@@ -219,6 +230,8 @@ export const JobsViewSchema = z.object({
   jobs: z.array(JobStatusSchema),
   /** The keys of `state/<campaign>/queue/`, the first entry first. The fleet starts their runs in this sequence. */
   queue: z.array(z.string()),
+  /** The keys of `queue` that wait for a check-only run: see `POST .../branches/:key/check`. */
+  check: z.array(z.string()),
   /** A fleet process of the campaign operates: see `FleetSchema`. */
   fleet: z.boolean(),
 });
@@ -312,6 +325,33 @@ export const ImportInputSchema = z.object({
   descriptions: z.string().min(1).optional(),
 });
 export type ImportInput = z.infer<typeof ImportInputSchema>;
+
+/** The numbers of the steps of `POST /api/campaigns/:c/sync`. See `sync` in the fleet package. */
+export const SyncResultSchema = z.object({
+  /** The number of entries of the task list. */
+  tasks: z.number().int(),
+  /** The keys of the drafts that `refreshPrs` changed. */
+  prs: z.array(z.string()),
+  /** The branches `<branch_prefix>*` of the fork. */
+  listed: z.number().int(),
+  /** The branches of the fork that the sync got with depth 2. */
+  fetched: z.number().int(),
+  /** The branch directories that the sync made, each with one run with the tag `imported`. */
+  made: z.number().int(),
+  /** The drafts that the sync made from the pull requests of the fork. */
+  drafts: z.number().int(),
+  /** The entries without a branch that got a link to a branch. */
+  links: z.number().int(),
+  /** The check-only runs that the sync added to the queue. */
+  queued: z.number().int(),
+  /** For example a branch of the fork that the repository of patchix has with a different commit. */
+  warnings: z.array(z.string()),
+});
+export type SyncResult = z.infer<typeof SyncResultSchema>;
+
+/** The body of `POST /api/campaigns/:c/sync`: the campaign after the sync, and the numbers of the sync. */
+export const SyncViewSchema = CampaignViewSchema.extend({ result: SyncResultSchema });
+export type SyncView = z.infer<typeof SyncViewSchema>;
 
 export const WorktreeSchema = z.object({ path: z.string(), branch: z.string() });
 export type Worktree = z.infer<typeof WorktreeSchema>;

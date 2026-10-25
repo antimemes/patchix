@@ -1,4 +1,4 @@
-import type { TaskState } from "@patchix/common";
+import type { SyncResult, TaskState } from "@patchix/common";
 
 export const STATES = ["todo", "running", "failed", "wontfix", "unverified", "ready", "pr", "merged", "closed", "external"] as const satisfies readonly TaskState[];
 const allStates: Exclude<TaskState, (typeof STATES)[number]> extends never ? true : false = true;
@@ -27,6 +27,21 @@ export const pullUrl = (repo: string, n: number) => `https://github.com/${repo}/
 
 export function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The numbers of a sync in one line, for the message of `useToast`. See `SyncResult`. */
+export function syncLine(r: SyncResult): string {
+  return [
+    plural(r.tasks, "task"),
+    `${plural(r.prs.length, "draft")} refreshed`,
+    plural(r.listed, "branch of the fork", "branches of the fork"),
+    `${r.fetched} fetched`,
+    `${plural(r.made, "directory", "directories")} made`,
+    `${plural(r.drafts, "draft")} made`,
+    `${plural(r.links, "link")} made`,
+    `${plural(r.queued, "check-only run")} queued`,
+    ...(r.warnings.length > 0 ? [plural(r.warnings.length, "warning")] : []),
+  ].join(" · ");
 }
 
 export function cx(...names: (string | false | null | undefined)[]): string {

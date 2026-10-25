@@ -9,7 +9,7 @@ const A = "python3Packages.wassima";
 const meta = {
   title: "Views/Run control",
   component: RunControl,
-  args: { campaign: "cacert", branch: A, jobs: { jobs: [], queue: [], fleet: false }, onJobs: fn() },
+  args: { campaign: "cacert", branch: A, jobs: { jobs: [], queue: [], check: [], fleet: false }, onJobs: fn() },
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(5), tasks: [task(A), task("anki")] }], fleetDelay: 60_000 }))],
 } satisfies Meta<typeof RunControl>;
 export default meta;
@@ -19,7 +19,7 @@ type Story = StoryObj<typeof meta>;
 export const Branch: Story = {};
 
 export const InTheQueue: Story = {
-  args: { jobs: { jobs: [], queue: ["calibre", A], fleet: true } },
+  args: { jobs: { jobs: [], queue: ["calibre", A], check: [], fleet: true } },
   play: async ({ canvas }) => {
     await canvas.findByText("The branch is in the queue.");
     await canvas.findByText("The queue has 1 entry before this branch.");
@@ -27,10 +27,29 @@ export const InTheQueue: Story = {
 };
 
 export const WithAJob: Story = {
-  args: { jobs: { jobs: [job(A, 3)], queue: [], fleet: true } },
+  args: { jobs: { jobs: [job(A, 3)], queue: [], check: [], fleet: true } },
   play: async ({ canvas }) => {
     await expect(await canvas.findByRole("button", { name: "Stop" })).toBeEnabled();
     await expect(canvas.getByRole("button", { name: "Run" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Check" })).toBeDisabled();
+  },
+};
+
+/** The Check button adds the branch to the queue for a check-only run: the checks of the tip, without the agent and without the text. */
+export const Check: Story = {
+  play: async ({ canvas, userEvent, args }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Check" }));
+    await waitFor(() => expect(args.onJobs).toHaveBeenCalledWith(expect.objectContaining({ queue: [A], check: [A] })));
+  },
+};
+
+/** A check-only run waits in the queue: the page does not accept a click on the Run button or on the Check button. */
+export const QueuedCheck: Story = {
+  args: { jobs: { jobs: [], queue: [A], check: [A], fleet: true } },
+  play: async ({ canvas }) => {
+    await canvas.findByText("The branch is the first in the queue. It waits for a check-only run.");
+    await expect(canvas.getByRole("button", { name: "Run" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Check" })).toBeDisabled();
   },
 };
 

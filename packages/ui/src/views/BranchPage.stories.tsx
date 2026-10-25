@@ -93,6 +93,22 @@ export const Queued: Story = {
   },
 };
 
+export const QueuedCheck: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: the sync got the branch from the fork and added a check-only run to the queue. The header and the list of runs show `check`. The run starts the checks of the tip, without the agent.",
+      },
+    },
+  },
+  decorators: [seed(() => branch(A, { runs: [importedRun(A, 40, [])], head: HEAD }), { queue: [A], check: [A], fleet: true })],
+  play: async ({ canvas }) => {
+    await canvas.findByText("The check-only run waits in the queue: the checks of the tip, without the agent.");
+    await expect(canvas.getByRole("button", { name: "Check" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Run" })).toBeDisabled();
+  },
+};
+
 export const Running: Story = {
   parameters: {
     docs: { description: { story: "2. Work tab, running: the Stop button stops the job. The notice above the tabs of the run gives the zellij tab of the run." } },

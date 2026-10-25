@@ -1,18 +1,28 @@
 /**
- * Reads the task list into `state/<campaign>/tasks.yaml`: the entries of the tracking issue and, when the campaign
- * has a `source` command, its output. Then it reads the state of the pull requests with `refreshPrs`. The sync does
- * not start `git fetch`. An entry without a branch can have the pull request number of a draft in its issue line.
- * Then it links to the branch of that draft: see `linkByPr`.
+ * The sync makes the state of a campaign agree with GitHub, in four steps:
+ * 1. The task list in `state/<campaign>/tasks.yaml`: the entries of the tracking issue and, when the campaign has a
+ *    `source` command, its output.
+ * 2. The state of the pull requests of the fork: see `refreshPrs`.
+ * 3. The branches `<branch_prefix>*` of the fork: see `forkBranch`. Each branch gets its commits, a branch directory
+ *    and a draft from its pull request, when the state does not have them. Then the entries without a branch get
+ *    their links: see `linkBranches`.
+ * 4. A check-only run in the queue for each branch of the fork without a pull request and without checks of the tip:
+ *    see `queueChecks`.
+ *
+ * Only `fetchRef` gets commits, with a depth of 2 commits. A branch of the repository of patchix that the fork does not
+ * have does not change. It can be work that a person did not push. The sync does not start the fleet: the server
+ * starts it.
  */
-import { ATTR, type Campaign, type Task } from "@patchix/common";
+import { ATTR, KEY, tipChecks, type Campaign, type SyncResult, type Task } from "@patchix/common";
 import { parseIssueTasks } from "./issue.ts";
-import { issueBody } from "./github.ts";
-import { baseWorktree } from "./git.ts";
-import { refreshPrs } from "./pr.ts";
+import { forkOf, issueBody, prList, type ListedPr } from "./github.ts";
+import { adopt, baseWorktree, branchName, cloneBase, commitTime, forkUrl, remoteBranches, repoPath, revParse, takeBranch, type RemoteBranch } from "./git.ts";
+import { importRun } from "./import.ts";
+import { draftFromPr, refreshPrs } from "./pr.ts";
 import { capture } from "./proc.ts";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import { branchKeys, campaignDir, exists, now, readCampaign, readPr, updateTasks, type Ctx } from "./store.ts";
+import { branchDir, branchKeys, campaignDir, checkAttrs, enqueue, exists, fail, jobs, listQueue, listRuns, message, now, readCampaign, readPr, updateTasks, type Ctx } from "./store.ts";
 
 /**
  * The task list of the issue body. A campaign with a `tasks.ts` file gives a different function, for an issue with a
@@ -33,13 +43,6 @@ export async function extractTasks(ctx: Ctx, c: string, body: string, warnings: 
     if (!ok) warnings.push(`the task list gave an attribute that is not in the issue: ${String(t.attr).slice(0, 80)}`);
     return ok;
   });
-}
-
-export interface SyncResult {
-  tasks: number;
-  /** The keys of the drafts that `refreshPrs` changed. */
-  prs: string[];
-  warnings: string[];
 }
 
 /** The lines `<attr>[ <text>]` of the output of `source`, by attribute. A line that does not start with an attribute is a warning. */
@@ -98,6 +101,90 @@ export function linkByPr(tasks: readonly Task[], numbers: ReadonlyMap<number, re
   });
 }
 
+/** The number of entries of `after` with a branch that had no branch in `before`. */
+function newLinks(before: readonly Task[], after: readonly Task[]): number {
+  const old = new Map(before.map((t) => [t.attr, t.branch]));
+  return after.filter((t) => t.branch !== null && (old.get(t.attr) ?? null) === null).length;
+}
+
+/**
+ * The links of the branches `keys`: an entry without a branch links to the branch of its attribute, when `keys` has
+ * the attribute. Then an entry without a branch links to the branch of the pull request number of its issue line (see
+ * `linkByPr`). The change goes through `updateTasks`. Gives the new task list and the number of new links.
+ */
+export async function linkBranches(ctx: Ctx, c: string, keys: ReadonlySet<string>): Promise<{ tasks: Task[]; links: number }> {
+  const numbers = await draftNumbers(ctx, c);
+  let links = 0;
+  const file = await updateTasks(ctx, c, (old) => {
+    if (old === null) return null;
+    const tasks = linkByPr(old.tasks.map((t) => (t.branch === null && keys.has(t.attr) ? { ...t, branch: t.attr } : t)), numbers);
+    links = newLinks(old.tasks, tasks);
+    return { ...old, tasks };
+  });
+  return { tasks: file?.tasks ?? [], links };
+}
+
+/** The result of `forkBranch`. `tip` is the commit of the branch in the repository of patchix, or `null` when the sync does not change the branch. */
+export interface ForkStep {
+  fetched: boolean;
+  made: boolean;
+  draft: boolean;
+  tip: string | null;
+}
+
+/**
+ * Step 3 of the sync for the branch `b` of the fork. The repository of patchix gets the branch with `takeBranch`. When
+ * the branch has no directory, the sync makes the directory with one run with the tag `imported` (see `importRun`).
+ * The `head` of the run is the tip, and its `base` is the parent. Its time is the time of the commit, and it declares
+ * no attribute. When the branch has no draft, the newest open or merged pull request of `listed` gives the draft:
+ * see `draftFromPr`. The `headRefName` of that pull request is the name of the branch.
+ */
+export async function forkBranch(ctx: Ctx, campaign: Campaign, b: RemoteBranch, listed: readonly ListedPr[], warnings: string[]): Promise<ForkStep> {
+  const c = campaign.name;
+  const taken = await takeBranch(ctx, campaign, "fork", b);
+  if (taken === null) warnings.push(`the repository of patchix has the branch ${b.branch} with a different commit than the fork: the sync does not change it (the adopt command replaces it)`);
+  let made = false;
+  if (taken !== null && !(await exists(branchDir(ctx, c, b.key)))) {
+    const repo = repoPath(ctx);
+    const parent = await revParse(repo, `${taken.tip}^`);
+    if (parent === null) {
+      warnings.push(`the repository of patchix has no parent of the tip of ${b.branch}: no run`);
+    } else {
+      const url = forkUrl(ctx, campaign, await forkOf(ctx));
+      await importRun(ctx, campaign, { branch: b.branch, key: b.key, tip: taken.tip, base: parent, attrs: [] }, url, null, await commitTime(repo, taken.tip));
+      made = true;
+    }
+  }
+  const pr = listed.find((p) => p.headRefName === b.branch && p.state !== "CLOSED");
+  const draft = pr !== undefined && (await draftFromPr(ctx, c, b.key, pr, b.sha));
+  return { fetched: taken?.fetched ?? false, made, draft, tip: taken?.tip ?? null };
+}
+
+/**
+ * Step 4 of the sync. A branch of `branches` can get a check-only run in the queue. The conditions are: no pull
+ * request in `listed`, no draft with a number, no job and no entry in the queue. Also, the branch has attributes (see
+ * `checkAttrs`), and none of them has checks of the tip (see `tipChecks`). Gives the number of new entries of the
+ * queue.
+ */
+async function queueChecks(ctx: Ctx, campaign: Campaign, branches: readonly { key: string; tip: string }[], listed: readonly ListedPr[], tasks: readonly Task[]): Promise<number> {
+  const c = campaign.name;
+  const busy = new Set([...(await jobs(ctx, c)).map((j) => j.key), ...(await listQueue(ctx, c))]);
+  const start = Date.now();
+  let queued = 0;
+  for (const { key, tip } of branches) {
+    if (busy.has(key) || listed.some((p) => p.headRefName === branchName(campaign, key)) || ((await readPr(ctx, c, key))?.number ?? null) !== null) continue;
+    const attrs = checkAttrs(tasks, key);
+    if (attrs.length === 0 || tipChecks(await listRuns(ctx, c, key), tip, attrs).some((t) => t.checks.length > 0)) continue;
+    // The times of the entries are in the sequence of the branches: thus the queue keeps that sequence.
+    if (await enqueue(ctx, c, key, new Date(start + queued).toISOString(), "check")) queued++;
+  }
+  return queued;
+}
+
+/**
+ * The four steps of the sync: see the top of this file. The repository of patchix or `git ls-remote` of the fork can
+ * give an error. Then the sync does not do steps 3 and 4, and the error is a warning.
+ */
 export async function sync(ctx: Ctx, c: string): Promise<SyncResult> {
   const campaign = await readCampaign(ctx, c);
   const issue = new Map<string, Task>();
@@ -109,12 +196,59 @@ export async function sync(ctx: Ctx, c: string): Promise<SyncResult> {
   }
   const source = await runSource(ctx, campaign, warnings);
   const numbers = await draftNumbers(ctx, c);
-  const file = await updateTasks(ctx, c, (old) => ({ synced: now(), tasks: linkByPr(mergeTasks([...issue.values()], source, old?.tasks ?? []), numbers) }));
-  const prs = await refreshPrs(ctx, campaign);
-  // `refreshPrs` can give a draft the number of its pull request: then an entry with that number gets the link.
-  if (prs.length > 0) {
-    const after = await draftNumbers(ctx, c);
-    await updateTasks(ctx, c, (old) => (old === null ? null : { ...old, tasks: linkByPr(old.tasks, after) }));
+  let links = 0;
+  const file = await updateTasks(ctx, c, (old) => {
+    const tasks = linkByPr(mergeTasks([...issue.values()], source, old?.tasks ?? []), numbers);
+    links = newLinks(old?.tasks ?? [], tasks);
+    return { synced: now(), tasks };
+  });
+
+  const listed = await prList(campaign.issue.repo, await forkOf(ctx));
+  const prs = await refreshPrs(ctx, campaign, listed);
+
+  const result: SyncResult = { tasks: file?.tasks.length ?? 0, prs, listed: 0, fetched: 0, made: 0, drafts: 0, links, queued: 0, warnings };
+  let remote: RemoteBranch[] = [];
+  try {
+    await cloneBase(ctx, campaign);
+    remote = await remoteBranches(ctx, campaign, "fork");
+  } catch (e) {
+    warnings.push(`the branches of the fork: ${message(e)}`);
   }
-  return { tasks: file?.tasks.length ?? 0, prs, warnings };
+  const taken: { key: string; tip: string }[] = [];
+  for (const b of remote) {
+    result.listed++;
+    if (!KEY.test(b.key)) {
+      warnings.push(`the branch ${b.branch} of the fork: the name after the prefix is not a key`);
+      continue;
+    }
+    const step = await forkBranch(ctx, campaign, b, listed, warnings);
+    result.fetched += Number(step.fetched);
+    result.made += Number(step.made);
+    result.drafts += Number(step.draft);
+    if (step.tip !== null) taken.push({ key: b.key, tip: step.tip });
+  }
+  // `refreshPrs` and the new drafts can give a branch the number of a pull request: see `linkBranches`.
+  const linked = await linkBranches(ctx, c, new Set(remote.filter((b) => KEY.test(b.key)).map((b) => b.key)));
+  result.links += linked.links;
+  result.queued = await queueChecks(ctx, campaign, taken, listed, linked.tasks);
+  return result;
+}
+
+/**
+ * `adopt <campaign> <key>`: step 3 of the sync for one branch. The fetch replaces the branch of the repository of
+ * patchix, also when it has a different commit: the person asks for it. The branch must have no worktree (see
+ * `adopt`). When `gh pr list` gives an error, the branch gets no draft, and the error is a warning.
+ */
+export async function adoptBranch(ctx: Ctx, c: string, key: string): Promise<ForkStep & { links: number; warnings: string[] }> {
+  if (!KEY.test(key)) fail(400, `not a branch key: ${key}`);
+  const campaign = await readCampaign(ctx, c);
+  const tip = await adopt(ctx, campaign, key);
+  const warnings: string[] = [];
+  const listed = await prList(campaign.issue.repo, await forkOf(ctx)).catch((e: unknown) => {
+    warnings.push(`gh pr list: ${message(e)}; no draft from the pull request`);
+    return [];
+  });
+  const step = await forkBranch(ctx, campaign, { branch: branchName(campaign, key), key, sha: tip }, listed, warnings);
+  const { links } = await linkBranches(ctx, c, new Set([key]));
+  return { ...step, fetched: true, links, warnings };
 }

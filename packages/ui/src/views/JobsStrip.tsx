@@ -14,7 +14,7 @@ import { useState } from "react";
 import "./views.css";
 
 /** The jobs view before the server gives it. */
-export const NO_JOBS: JobsView = { jobs: [], queue: [], fleet: false };
+export const NO_JOBS: JobsView = { jobs: [], queue: [], check: [], fleet: false };
 
 export interface JobsStripProps {
   campaign: string;
@@ -23,10 +23,10 @@ export interface JobsStripProps {
   onJobs: (view: JobsView) => void;
 }
 
-/** The jobs that operate, the queue and the state of the fleet of a campaign. */
+/** The jobs that operate, the queue and the state of the fleet of a campaign. An entry of a check-only run also shows `check`. */
 export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProps) {
   const client = useClient();
-  const { jobs, queue, fleet } = view;
+  const { jobs, queue, check, fleet } = view;
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), jobs.length > 0 ? 10_000 : null);
   const stop = useAction(async (key: string) => onJobs(await client.stopJob(campaign, key)));
@@ -100,6 +100,11 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
                 <Link href={href.branch(campaign, key)} className="mono break small">
                   {key}
                 </Link>
+                {check.includes(key) && (
+                  <Badge tone="muted" title="A check-only run: the checks of the tip, without the agent.">
+                    check
+                  </Badge>
+                )}
                 <Button size="sm" variant="ghost" aria-label={`Remove ${key} from the queue`} title="Remove from the queue" pending={stop.pending} onClick={() => void stop.run(key)}>
                   ×
                 </Button>

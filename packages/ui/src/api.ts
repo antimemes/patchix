@@ -14,6 +14,7 @@ import type {
   RunInput,
   Settings,
   SettingsView,
+  SyncView,
   Worktree,
 } from "@patchix/common";
 
@@ -41,7 +42,8 @@ export function errorMessage(error: unknown): string {
 export interface Client {
   campaigns(): Promise<CampaignSummary[]>;
   campaign(c: string): Promise<CampaignView>;
-  sync(c: string): Promise<CampaignView>;
+  /** Makes the state agree with GitHub. The result gives the numbers of the steps: see `SyncResult`. */
+  sync(c: string): Promise<SyncView>;
   refresh(c: string): Promise<CampaignView>;
   fetchBase(c: string): Promise<CampaignView>;
   labels(c: string): Promise<Label[]>;
@@ -62,6 +64,8 @@ export interface Client {
   clearQueue(c: string): Promise<JobsView>;
   /** Adds the branch to the queue for one run, with the question of `input` or without a question. See `RunInput`. */
   startRun(c: string, key: string, input: RunInput): Promise<JobsView>;
+  /** Adds the branch to the queue for one check-only run: the checks of the tip, without the agent. */
+  startCheck(c: string, key: string): Promise<JobsView>;
   /** Adds the key of `input` to the queue. A key that is not there is a free-text run: the text is necessary. See `FreeRunInput`. */
   startFreeRun(c: string, input: FreeRunInput): Promise<JobsView>;
   /** Links the entry to the branch of the key, or removes its link with `null`. See `PUT .../tasks/:attr/branch`. */
@@ -146,6 +150,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     stopJob: (c, key) => json("DELETE", `${campaign(c)}/jobs/${s(key)}`),
     clearQueue: (c) => json("DELETE", `${campaign(c)}/queue`),
     startRun: (c, key, input) => json("POST", `${branch(c, key)}/run`, input),
+    startCheck: (c, key) => json("POST", `${branch(c, key)}/check`),
     startFreeRun: (c, input) => json("POST", `${campaign(c)}/run`, input),
     linkEntry: (c, attr, key) => json("PUT", `${campaign(c)}/tasks/${s(attr)}/branch`, { key }),
     saveDraft: (c, key, input) => json("PUT", `${branch(c, key)}/draft`, input),

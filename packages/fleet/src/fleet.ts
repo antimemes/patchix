@@ -1,7 +1,8 @@
 /**
  * The fleet of a campaign: one process, `cli.ts fleet <campaign>`, that starts the runs of the queue. It operates in a
  * tab of the zellij session. Each 5 seconds, it reads the campaign, the settings and the queue. An entry of the queue is
- * the key of a branch. The `concurrency` of the settings is the maximum number of jobs of the campaign. Until the
+ * the key of a branch, with its mode: a usual run, or a check-only run (`run <campaign> <key> --check`, see
+ * `QueueMode`). The `concurrency` of the settings is the maximum number of jobs of the campaign. Until the
  * campaign has that number of jobs, the fleet starts the run of the first entry without a job and removes the entry. When the queue is empty, the fleet stops. The
  * fleet does not operate the runs: each run has its tab.
  *
@@ -26,6 +27,7 @@ import {
   message,
   newId,
   now,
+  queueEntries,
   readCampaign,
   readFleet,
   readSettings,
@@ -37,6 +39,7 @@ import {
   writeFleet,
   writeRun,
   type Ctx,
+  type QueueMode,
 } from "./store.ts";
 
 export interface FleetOptions {
@@ -65,19 +68,21 @@ function logger(ctx: Ctx, c: string, opts: FleetOptions): (line: string) => Prom
 
 /**
  * Starts the run of the branch in a new tab and waits for its `run.yaml`. When the runner does not write a record in
- * `startMs`, the fleet writes a `failed` record with the model `model`. That record gets the question of the branch.
- * The fleet writes no other record of a run. Then it removes the entry of the queue.
+ * `startMs`, the fleet writes a `failed` record with the model `model`. That record gets the question of the branch,
+ * or the tag `check` for a check-only run. The fleet writes no other record of a run. Then it removes the entry of
+ * the queue.
  */
-async function startOne(ctx: Ctx, campaign: Campaign, model: string, key: string, log: (line: string) => Promise<void>, startMs: number): Promise<void> {
+async function startOne(ctx: Ctx, campaign: Campaign, model: string, key: string, mode: QueueMode, log: (line: string) => Promise<void>, startMs: number): Promise<void> {
   const c = campaign.name;
+  const check = mode === "check";
   const started = new Date();
   const since = runId(started);
   /** The newest run of the branch that started after the fleet opened the tab. */
   const record = async (): Promise<Run | null> => (await listRuns(ctx, c, key)).find((r) => r.id >= since) ?? null;
-  await log(`${key}: start the run`);
+  await log(`${key}: start the ${check ? "check-only run" : "run"}`);
   let error: string | null = null;
   try {
-    if (!(await launch(ctx, `${c}/${key}`, ["run", c, key])).tab) await log(`${key}: warning: the tab ${c}/${key} is not in the zellij session; the run can operate without a tab`);
+    if (!(await launch(ctx, `${c}/${key}`, ["run", c, key, ...(check ? ["--check"] : [])])).tab) await log(`${key}: warning: the tab ${c}/${key} is not in the zellij session; the run can operate without a tab`);
   } catch (e) {
     error = message(e);
   }
@@ -90,9 +95,9 @@ async function startOne(ctx: Ctx, campaign: Campaign, model: string, key: string
     await log(`${key}: the run ${run.id} started`);
   } else if ((await record()) === null) {
     const id = await newId(join(branchDir(ctx, c, key), "runs"));
-    const question = await takeQuestion(ctx, c, key, id);
+    const question = check ? null : await takeQuestion(ctx, c, key, id);
     const text = error === null ? "the run did not start" : `the run did not start: ${error}`;
-    await writeRun(ctx, c, { id, key, attrs: [], tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
+    await writeRun(ctx, c, { id, key, attrs: [], tags: check ? ["check"] : [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
     await log(`${key}: ${text}; the fleet wrote the failed run ${id}`);
   }
   await dequeue(ctx, c, key);
@@ -106,13 +111,13 @@ async function startOne(ctx: Ctx, campaign: Campaign, model: string, key: string
 export async function fleetTick(ctx: Ctx, c: string, opts: FleetOptions = {}): Promise<boolean> {
   const log = logger(ctx, c, opts);
   const campaign = await readCampaign(ctx, c);
-  const queue = await listQueue(ctx, c);
+  const queue = await queueEntries(ctx, c);
   if (queue.length === 0) return false;
   const live = await jobs(ctx, c);
   const busy = new Set(live.map((j) => j.key));
   const settings = await readSettings(ctx);
   let free = settings.concurrency - live.length;
-  for (const key of queue) {
+  for (const { key, mode } of queue) {
     if (free <= 0) break;
     if (busy.has(key)) continue;
     if (!(await branchExists(ctx, campaign, key))) {
@@ -120,7 +125,7 @@ export async function fleetTick(ctx: Ctx, c: string, opts: FleetOptions = {}): P
       await log(`${key}: no branch ${key}; removed from the queue`);
       continue;
     }
-    await startOne(ctx, campaign, settings.model, key, log, opts.startMs ?? 30_000);
+    await startOne(ctx, campaign, settings.model, key, mode, log, opts.startMs ?? 30_000);
     busy.add(key);
     free--;
   }

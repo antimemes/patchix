@@ -15,7 +15,7 @@ const MAX_TEXT = 4000;
 /** The signs of a key: see `KEY` of `@patchix/common`. The client does not import the schemas. */
 const KEY_SIGNS = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 /** The text below the Run button when a click adds the branch to the queue. */
-const RUN_HINT = "The branch goes into the queue. With a question, the next run continues the session of the agent.";
+const RUN_HINT = "The branch goes into the queue. With a question, the next run continues the session of the agent. Check starts only the checks of the tip, without the agent.";
 
 export interface RunControlProps {
   campaign: string;
@@ -31,7 +31,8 @@ export interface RunControlProps {
  * The text for the agent and the Run button. Also the Stop button, the job of the branch and its position in the
  * queue. Without a text, the run is a usual run. With a text, the next run continues the session of `claude` in the
  * worktree with the text as a question. With the key field, a new key is a free-text run: the text is necessary, and
- * it is the work of the agent. The server rejects a run for a branch with a job or with an entry.
+ * it is the work of the agent. The control of a branch also has the Check button: a check-only run, without the agent
+ * and without the text. The server rejects a run for a branch with a job or with an entry.
  */
 export function RunControl({ campaign, branch, known, jobs, onJobs }: RunControlProps) {
   const client = useClient();
@@ -41,6 +42,7 @@ export function RunControl({ campaign, branch, known, jobs, onJobs }: RunControl
   const key = (branch ?? field).trim();
   const job = jobs.jobs.find((j) => j.key === key) ?? null;
   const place = key === "" ? -1 : jobs.queue.indexOf(key);
+  const checkOnly = jobs.check.includes(key);
   const fresh = branch === null && key !== "" && !(known?.has(key) ?? false);
   const start = useAction(async () => {
     const question = text.trim();
@@ -49,25 +51,28 @@ export function RunControl({ campaign, branch, known, jobs, onJobs }: RunControl
     if (branch === null) setField("");
     toast(`${key} is in the queue`, fresh ? "The fleet makes the branch from the base and gives the text to the agent." : question === "" ? "The fleet starts the run in a free job place." : "The next run of the branch gets the question.");
   });
+  const check = useAction(async () => {
+    onJobs(await client.startCheck(campaign, key));
+    toast(`${key} is in the queue`, "The fleet starts the checks of the tip, without the agent.");
+  });
   const stop = useAction(async () => {
     const queued = place >= 0;
     onJobs(await client.stopJob(campaign, key));
     toast(queued ? `${key} is not in the queue now` : `The job of ${key} stops`);
   });
+  // The conditions that stop the Run button and the Check button.
+  const busy = job !== null ? "A job of this branch operates." : place >= 0 ? "The branch is in the queue." : null;
   const reason =
     key === ""
       ? "Write the key of the branch."
       : !KEY_SIGNS.test(key)
         ? "A key has only the signs A-Z, a-z, 0-9, _, . and -, and it does not start with . or -."
-        : job !== null
-          ? "A job of this branch operates."
-          : place >= 0
-            ? "The branch is in the queue."
-            : text.length > MAX_TEXT
-              ? `The text has more than ${MAX_TEXT} characters.`
-              : fresh && text.trim() === ""
-                ? "A new branch must have a text: the work for the agent."
-                : null;
+        : (busy ??
+          (text.length > MAX_TEXT
+            ? `The text has more than ${MAX_TEXT} characters.`
+            : fresh && text.trim() === ""
+              ? "A new branch must have a text: the work for the agent."
+              : null));
   const hint = branch !== null ? RUN_HINT : fresh ? "A new branch from the base. The text is the work for the agent." : `A run of the branch ${key}. The text is a question.`;
   return (
     <div className="stack" aria-label={branch === null ? "Run" : "Next run"}>
@@ -92,12 +97,20 @@ export function RunControl({ campaign, branch, known, jobs, onJobs }: RunControl
         <Button variant="primary" disabled={reason !== null} pending={start.pending} onClick={() => void start.run()}>
           Run
         </Button>
+        {branch !== null && (
+          <Button disabled={busy !== null} pending={check.pending} onClick={() => void check.run()} title="Start the checks of the entries of the branch on its tip, without the agent.">
+            Check
+          </Button>
+        )}
         {job === null && place >= 0 && (
           <>
             <Button variant="danger" pending={stop.pending} onClick={() => void stop.run()}>
               Remove from queue
             </Button>
-            <span className="small muted">{place === 0 ? "The branch is the first in the queue." : `The queue has ${place} ${place === 1 ? "entry" : "entries"} before this branch.`}</span>
+            <span className="small muted">
+              {place === 0 ? "The branch is the first in the queue." : `The queue has ${place} ${place === 1 ? "entry" : "entries"} before this branch.`}
+              {checkOnly && " It waits for a check-only run."}
+            </span>
           </>
         )}
         {job !== null && (
@@ -121,6 +134,7 @@ export function RunControl({ campaign, branch, known, jobs, onJobs }: RunControl
       </div>
       <span className="small muted">{reason ?? hint}</span>
       {start.error !== null && <Notice tone="error">Run: {start.error}</Notice>}
+      {check.error !== null && <Notice tone="error">Check: {check.error}</Notice>}
       {stop.error !== null && <Notice tone="error">Stop: {stop.error}</Notice>}
     </div>
   );

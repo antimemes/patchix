@@ -553,13 +553,14 @@ test("refreshPrs writes the state of the pull requests of the fork into the draf
   const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
   const calls = join(root, "gh.txt");
   const gh = join(root, "gh.sh");
+  const fields = { title: "a title", body: "", labels: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" };
   const listed = [
     { number: 12, state: "CLOSED", mergedAt: null, url: "u12", headRefName: "t/shared" },
     { number: 11, state: "OPEN", mergedAt: null, url: "u11", headRefName: "t/shared" },
     { number: 10, state: "OPEN", mergedAt: null, url: "u10", headRefName: "t/qux" },
     { number: 8, state: "OPEN", mergedAt: null, url: "u8", headRefName: "t/bar" },
     { number: 7, state: "MERGED", mergedAt: "2026-10-23T12:08:25Z", url: "u7", headRefName: "t/old-name" },
-  ];
+  ].map((p) => ({ ...p, ...fields }));
   try {
     await mkdir(join(root, "campaigns", "t"), { recursive: true });
     await writeFile(join(root, "campaigns", "t", "campaign.yaml"), "name: t\ntitle: Test\nissue: { repo: NixOS/nixpkgs, number: 1 }\nbranch_prefix: t/\n");
@@ -578,7 +579,7 @@ test("refreshPrs writes the state of the pull requests of the fork into the draf
     const campaign = await readCampaign(ctx, "t");
 
     assert.deepEqual(await refreshPrs(ctx, campaign), ["bar", "foo", "shared"]);
-    assert.equal((await readFile(calls, "utf8")).trim(), "pr list --repo NixOS/nixpkgs --author someone --state all --limit 300 --json number,state,mergedAt,url,headRefName");
+    assert.equal((await readFile(calls, "utf8")).trim(), "pr list --repo NixOS/nixpkgs --author someone --state all --limit 300 --json number,state,mergedAt,url,headRefName,title,body,labels,createdAt,updatedAt");
     const fields = async (key: string) => {
       const p = await readPr(ctx, "t", key);
       return p === null ? null : [p.number, p.state, p.merged, p.url];
