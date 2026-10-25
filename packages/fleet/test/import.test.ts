@@ -184,7 +184,8 @@ test("the import makes a run and a draft for each task of a branch", async () =>
 
   const pr = await readPr(ctx, "t", "foo");
   assert.deepEqual([pr?.title, pr?.labels, pr?.words, pr?.number, pr?.url, pr?.state, pr?.run], ["foo: use cacert bundle", ["1.severity: security"], ["castore"], 577, "https://github.com/NixOS/nixpkgs/pull/577", "open", run?.id]);
-  const rendered = (await renderDraft(ctx, "t", "foo")) ?? "";
+  assert.deepEqual((await renderDraft(ctx, "t", "foo"))?.problems, [], "the marks of the draft have no problem");
+  const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
   assert.match(rendered, /harness foo --pr 577/);
   assert.match(rendered, /VERDICT foo emudhra: FIXED/);
   assert.match(rendered, /Before 577, it trusts/);

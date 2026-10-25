@@ -48,7 +48,8 @@
  *   the error `CONFIRM_ERROR`. When the request has no error, `pr.yaml` gets the time of the request in
  *   `confirmed`. The newest run must be `ok` or `unverified` and the task must have no job: if not, it gives 409. It
  *   also gives 409 for a pull request that is `merged` or `closed`, and for a commit of the branch with a problem
- *   (see `TaskDetail.commit_problems`). memelint findings of the draft do not stop the request: the page shows
+ *   (see `TaskDetail.commit_problems`). A draft with a mark problem gives 409 too: the error text gives each problem
+ *   (see `TaskDetail.mark_problems`). memelint findings of the draft do not stop the request: the page shows
  *   them. After these conditions, each command (`git push`, `gh api` for the pull request and for the labels) and its
  *   `stdout` and `stderr` go into `publish.log` of the task. Each request writes the file again. The `TaskDetail`
  *   has the file in `publish_log`.
@@ -140,6 +141,12 @@ export const TaskDetailSchema = z.object({
   draft: z.string().nullable(),
   /** The description with each mark replaced, as it goes to GitHub. */
   rendered: z.string().nullable(),
+  /**
+   * The problems of the marks of `pr.md`, for example "the mark `{{foo}}` is not known". The rendered text keeps
+   * a mark with a problem as it is. An empty list when the task has no draft. With a problem in this list,
+   * `POST .../pr` gives 409. See `render` in the fleet package.
+   */
+  mark_problems: z.array(z.string()),
   /**
    * The findings of memelint on `pr.md`, with the words of `campaigns/:c/memelint.toml` and the `words` of the draft.
    * `null` when the task has no draft, or when memelint gave an error (the server log has it).

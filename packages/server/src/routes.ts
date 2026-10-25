@@ -94,12 +94,14 @@ async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDeta
           console.error(`commits ${c}/${attr}: ${fleet.message(e)}`);
           return [];
         });
+  const rendered = await fleet.renderDraft(ctx, c, attr);
   return {
     campaign,
     task,
     asks: await fleet.listAsks(ctx, c, attr),
     draft: await fleet.readDraft(ctx, c, attr),
-    rendered: await fleet.renderDraft(ctx, c, attr),
+    rendered: rendered?.text ?? null,
+    mark_problems: rendered?.problems ?? [],
     lint,
     campaign_words: await fleet.campaignWords(ctx, c),
     publish_log: await fleet.readPublishLog(ctx, c, attr),

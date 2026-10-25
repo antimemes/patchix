@@ -6,6 +6,7 @@ import { withMock, type MockCampaign } from "../mock/client.tsx";
 import {
   AMENDED,
   CAMPAIGN,
+  badMarkDescription,
   HEAD,
   at,
   ask,
@@ -250,6 +251,34 @@ export const TrailerMissing: Story = {
     await within(reasons).findByText("Amend the commit in the worktree, then reload.");
     const button = await canvas.findByRole("button", { name: "Push and create pull request" });
     await expect(button).toBeDisabled();
+  },
+};
+
+/** The problem of the mark of `badMarkDescription`. */
+const MARK_PROBLEM = "the mark `{{check:harness --whatever}}`: the check `harness` has no flag `--whatever`";
+
+export const MarkProblem: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "Publish tab: the check mark of the draft has the flag `--whatever`, but the check `harness` does not have this flag. An error above the preview gives the problem, and the preview shows the mark as text. The person set the tick box, but the button stays disabled. The reasons give the problem.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+      drafts: { [A]: badMarkDescription(A) },
+    }),
+  ],
+  play: async ({ canvas, userEvent }) => {
+    const notice = await canvas.findByRole("alert", { name: "Mark problems" });
+    await within(notice).findByText(MARK_PROBLEM);
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    const reasons = await canvas.findByRole("list", { name: "Reasons that the button is disabled" });
+    await within(reasons).findByText(MARK_PROBLEM);
+    await expect(await canvas.findByRole("button", { name: "Push and create pull request" })).toBeDisabled();
   },
 };
 

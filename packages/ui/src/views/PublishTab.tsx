@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { publishable } from "@patchix/common/status";
 import type { DraftInput, Pr, Run, TaskDetail} from "@patchix/common";
 import { ApiError } from "../api.ts";
@@ -62,6 +62,8 @@ export interface PrState {
   confirmed: boolean;
   /** The commits of the branch with a problem. See `TaskDetail.commit_problems`. */
   commitProblems: TaskDetail["commit_problems"];
+  /** The problems of the marks of the draft on the server. See `TaskDetail.mark_problems`. */
+  markProblems: TaskDetail["mark_problems"];
 }
 
 /** The text after the commit problems: the instruction for the person. */
@@ -74,6 +76,7 @@ export function prBlockers(s: PrState): string[] {
   if (s.commitProblems.length > 0) reasons.push(AMEND_HINT);
   if (!s.hasDraft) reasons.push("Make a draft first.");
   if (s.draftDirty) reasons.push("Save the changes of the draft.");
+  reasons.push(...s.markProblems);
   if (s.newestRun === undefined) reasons.push("The task has no run.");
   else if (!publishable(s.newestRun)) reasons.push(`The newest run is ${s.newestRun.status}, not ok or unverified.`);
   if (s.jobRunning) reasons.push("A job of this task operates.");
@@ -115,6 +118,8 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
 
   // The server lints the draft when it writes the draft and when it gives the task.
   const findings = detail.lint?.findings ?? null;
+  /** The flags of each check for the Marks line, for example `harness: --force-build --shim VALUE`. See `Check.flags`. */
+  const flagHints = campaign.checks.flatMap((c) => (c.flags !== undefined && c.flags.length > 0 ? [`${c.name}: ${c.flags.map((f) => (f.value ? `${f.name} VALUE` : f.name)).join(" ")}`] : []));
 
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   /** The number of clicks on the button. After each click, the output opens. */
@@ -168,7 +173,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
-  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems });
+  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems, markProblems: detail.mark_problems });
 
   if (draft === null) {
     return (
@@ -234,7 +239,14 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
             onValueChange={(description) => change({ description })}
             description={
               <>
-                Marks: <code>{"{{disclosure}}"}</code> <code>{"{{check:NAME}}"}</code> <code>{"{{check:NAME --flag}}"}</code> <code>{"{{template}}"}</code> <code>{"{pr}"}</code>
+                Marks: <code>{"{{disclosure}}"}</code> <code>{"{{check:NAME}}"}</code> <code>{"{{check:NAME [flags of the check]}}"}</code> <code>{"{{template}}"}</code> <code>{"{pr}"}</code>
+                {flagHints.length > 0 && " · Flags:"}
+                {flagHints.map((h) => (
+                  <Fragment key={h}>
+                    {" "}
+                    <code>{h}</code>
+                  </Fragment>
+                ))}
               </>
             }
           />
@@ -324,6 +336,16 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
             <h2>Preview</h2>
             {draftDirty && <span className="small muted">The preview shows the saved draft.</span>}
           </div>
+          {detail.mark_problems.length > 0 && (
+            <Notice tone="error" aria-label="Mark problems">
+              <p>GitHub shows a mark with a problem as text. Correct the marks of the draft: until then, the pull request button stays disabled.</p>
+              <ul className="reasons">
+                {detail.mark_problems.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </Notice>
+          )}
           {detail.rendered === null ? <p className="muted">No preview.</p> : <Markdown text={detail.rendered} aria-label="Preview of the description" />}
           {detail.rendered !== null && (
             <Disclosure label="Markdown text">

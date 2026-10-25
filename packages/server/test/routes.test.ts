@@ -115,6 +115,8 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.match(first.rendered ?? "", /Claude Code used Claude Opus 5\.5\. This pull request description[^\n]*I established confidence in this output: by manual review/);
   assert.deepEqual(first.campaign_words, ["patchix"]);
   assert.deepEqual(first.lint?.findings, []);
+  assert.deepEqual(first.mark_problems, []);
+  assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/bar")).body).mark_problems, [], "no draft");
   assert.equal(first.publish_log, null);
   assert.equal((await json("/api/campaigns/t/tasks/foo/review", send("PUT", { note: "x" }))).status, 404, "no review route");
   assert.equal((await json("/api/campaigns/t/tasks/foo/lint", { method: "POST" })).status, 404, "no lint route: the GET and the PUT of the draft lint");
@@ -168,6 +170,15 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   const linted = await json("/api/campaigns/t/tasks/foo/pr", confirm);
   assert.equal(linted.status, 500, "memelint findings do not stop the pull request");
   assert.match(PublishErrorSchema.parse(linted.body).publish_log ?? "", /\n\$ git push fork t\/foo\n/);
+  // A mark with a problem stops the pull request before each command. The check `harness` has no flags.
+  const marked = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo/draft", send("PUT", { ...draft, description: "{{check:harness --force-build}} {{foo}}\n" }))).body);
+  const problems = ["the mark `{{check:harness --force-build}}`: the check `harness` has no flag `--force-build`", "the mark `{{foo}}` is not known"];
+  assert.deepEqual(marked.mark_problems, problems);
+  assert.equal(marked.rendered, "{{check:harness --force-build}} {{foo}}\n", "the text keeps the marks");
+  assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).mark_problems, problems);
+  const oldLog = await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text();
+  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: `the marks of the draft have problems: ${problems.join("; ")}`, publish_log: null } });
+  assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), oldLog, "no command started");
   assert.equal((await json("/api/campaigns/t/tasks/bar/draft", send("PUT", draft))).status, 404, "no draft");
   assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).status, 404, "no worktree");
 });

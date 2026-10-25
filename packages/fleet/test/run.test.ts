@@ -213,7 +213,8 @@ test("a run with a commit, a description and a check that passes is ok", async (
   assert.equal(pr.title, "foo: use cacert bundle instead of bundled CA file");
   assert.deepEqual(pr.words, ["castore"]);
   assert.match((await readDraft(ctx, "t", "foo")) ?? "", /^Part of #1\./);
-  const rendered = (await renderDraft(ctx, "t", "foo")) ?? "";
+  assert.deepEqual((await renderDraft(ctx, "t", "foo"))?.problems, [], "the marks of the draft have no problem");
+  const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
   assert.ok(!rendered.includes("{{"), rendered);
   assert.match(rendered, /harness foo --pr <this PR>/);
   const { commits, head, moved } = await runCommits(ctx, "t", "foo", run.id);

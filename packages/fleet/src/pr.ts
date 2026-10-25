@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIRM_ERROR, publishable, type Campaign, type DraftInput, type LintResult, type Pr, type PublishInput } from "@patchix/common";
-import { render } from "./render.ts";
+import { render, type Rendered } from "./render.ts";
 import { addLabels, forkOf, prCreate, prEdit, prList, type ListedPr } from "./github.ts";
 import { branchOf, commitProblems, problemText, push, repoPath, revParse, setForkRemote, subject, taskBranch, worktreePath } from "./git.ts";
 import { lintText } from "./lint.ts";
@@ -78,7 +78,7 @@ export function hidePaths(ctx: Ctx, worktree: string, output: string): string {
   return output.replaceAll(worktree, "<worktree>").replaceAll(ctx.data, "<patchix>").replaceAll(ctx.root, "<patchix>");
 }
 
-async function renderPr(ctx: Ctx, campaign: Campaign, attr: string, pr: Pr, body: string, number: number | null): Promise<string> {
+async function renderPr(ctx: Ctx, campaign: Campaign, attr: string, pr: Pr, body: string, number: number | null): Promise<Rendered> {
   const run = await readRun(ctx, campaign.name, attr, pr.run).catch(() => null);
   const worktree = worktreePath(ctx, campaign, attr);
   const checks = new Map<string, string>();
@@ -89,8 +89,8 @@ async function renderPr(ctx: Ctx, campaign: Campaign, attr: string, pr: Pr, body
   return render({ body, campaign, attr, pr: number, checks, models: run === null ? [] : [run.model] });
 }
 
-/** The description as it goes to GitHub, or `null` when the task has no draft. */
-export async function renderDraft(ctx: Ctx, c: string, attr: string): Promise<string | null> {
+/** The description as it goes to GitHub and the problems of its marks, or `null` when the task has no draft. */
+export async function renderDraft(ctx: Ctx, c: string, attr: string): Promise<Rendered | null> {
   const pr = await readPr(ctx, c, attr);
   const body = await readDraft(ctx, c, attr);
   if (pr === null || body === null) return null;
@@ -122,9 +122,10 @@ export function putDraft(ctx: Ctx, c: string, attr: string, input: DraftInput): 
  * Pushes the branch to the fork and makes the pull request, or writes its title and description again. Then it
  * adds the labels. A new pull request gets its description two times: the second time has its number. The worktree
  * stays: only `DELETE …/worktree` removes it. These conditions give an error: no draft, and a newest run that is
- * not `ok` or `unverified`. A job of the task and a pull request that is `merged` or `closed` also give an error. A
- * commit of the branch with a problem also gives an error: see `commitProblems`. memelint findings of the draft do
- * not stop the pull request: the page shows them.
+ * not `ok` or `unverified`. A mark of the draft with a problem also gives an error: see `Rendered.problems`. A job of
+ * the task and a pull request that is `merged` or `closed` also give an error. A commit of the branch with a problem
+ * also gives an error: see `commitProblems`. memelint findings of the draft do not stop the pull request: the page
+ * shows them.
  *
  * After the conditions, each command and its output go into `publish.log` of the task, also after an error. The file
  * has only the commands of the newest request. It gets each line at the time of the line: thus the page can show the
@@ -143,6 +144,9 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     const pr = await needPr(ctx, c, attr);
     if (pr.number !== null && pr.state !== "open") fail(409, `the pull request #${pr.number} is ${pr.state}`);
     const body = (await readDraft(ctx, c, attr)) ?? fail(404, `the task ${attr} has no pr.md`);
+    // The problems do not change with the number: the two descriptions of `publish` have the same marks.
+    const marks = (await renderPr(ctx, campaign, attr, pr, body, pr.number)).problems;
+    if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
     const job = await taskJob(ctx, c, attr);
     if (job !== null) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
     const newest = (await listRuns(ctx, c, attr))[0];
@@ -216,7 +220,7 @@ async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, bo
     const file = join(dir, "body.md");
     let number = pr.number;
     if (number === null) {
-      await writeFile(file, await renderPr(ctx, campaign, attr, pr, body, null));
+      await writeFile(file, (await renderPr(ctx, campaign, attr, pr, body, null)).text);
       const made = await prCreate(repo, campaign.base_branch, `${fork}:${branch}`, pr.title, file, log);
       number = made.number;
       pr = { ...pr, number, url: made.url, created: now() };
@@ -228,7 +232,7 @@ async function publish(ctx: Ctx, campaign: Campaign, attr: string, draft: Pr, bo
     } catch (e) {
       log.push(`the labels were not set: ${message(e)}`);
     }
-    await writeFile(file, await renderPr(ctx, campaign, attr, pr, body, number));
+    await writeFile(file, (await renderPr(ctx, campaign, attr, pr, body, number)).text);
     await prEdit(repo, number, pr.title, file, log);
     const done = { ...pr, number, updated: now(), confirmed };
     await writePr(ctx, c, attr, done);

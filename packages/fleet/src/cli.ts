@@ -91,7 +91,9 @@ async function main(): Promise<number> {
     const run = id ?? (await listRuns(ctx, campaign, attr)).find((r) => publishable(r))?.id;
     if (run === undefined) throw new Error(`${attr} has no ok or unverified run; give the run id`);
     const pr = await draftFromRun(ctx, campaign, attr, run);
-    console.log(`${pr.title}\n\n${(await renderDraft(ctx, campaign, attr)) ?? ""}`);
+    const rendered = await renderDraft(ctx, campaign, attr);
+    console.log(`${pr.title}\n\n${rendered?.text ?? ""}`);
+    for (const problem of rendered?.problems ?? []) console.error(`warning: ${problem}`);
     return 0;
   }
   if (command === "import" && attr !== undefined && rest.length === 1) {

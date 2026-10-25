@@ -17,4 +17,10 @@ checks:
     command: nix run github:irgolic/nix-cacert-harness -- {attr} --base {base} --emudhra
     pass: "^VERDICT {attr} emudhra: FIXED"
     reviewer: nix run github:irgolic/nix-cacert-harness -- {attr} --pr {pr} --emudhra
+    # These are the flags of nix-cacert-harness that a person can add to the check mark of a description.
+    flags:
+      - name: --force-build
+      - name: --shim
+        value: true
+      - name: --no-system-store
     timeout_minutes: 120

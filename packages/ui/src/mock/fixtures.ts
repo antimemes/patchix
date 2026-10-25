@@ -24,6 +24,11 @@ export const CAMPAIGN: Campaign = {
       command: "nix run github:irgolic/nix-cacert-harness -- {attr} --base {base} --emudhra",
       pass: "^VERDICT {attr} emudhra: FIXED",
       reviewer: "nix run github:irgolic/nix-cacert-harness -- {attr} --pr {pr} --emudhra",
+      flags: [
+        { name: "--force-build", value: false },
+        { name: "--shim", value: true },
+        { name: "--no-system-store", value: false },
+      ],
       timeout_minutes: 90,
     },
     { name: "build", command: "nix-build -A {attr} --no-out-link", pass: "^/nix/store/", timeout_minutes: 60 },
@@ -545,6 +550,39 @@ Please check what applies. Note that these are not hard requirements but merely 
 [automation/AI policy]: https://github.com/NixOS/nixpkgs/blob/master/CONTRIBUTING.md#automationai-policy
 [maintainers/README.md]: https://github.com/NixOS/nixpkgs/blob/master/maintainers/README.md
 [pkgs/README.md]: https://github.com/NixOS/nixpkgs/blob/master/pkgs/README.md`;
+
+/** The description of `description` with a flag that the check `harness` does not have. */
+export function badMarkDescription(attr: string): string {
+  return description(attr).replace("{{check:harness}}", "{{check:harness --whatever}}");
+}
+
+/**
+ * The problems of the marks, as `render.ts` gives them, but this function examines less. A check mark must have the
+ * name of a check of the campaign. Then it must have only flags of that check, each with its value when it has one. A
+ * different `{{...}}` text is not known.
+ */
+export function fakeMarkProblems(body: string, campaign: Campaign): string[] {
+  const problems: string[] = [];
+  for (const [mark, inside = ""] of body.matchAll(/\{\{([^{}]*)\}\}/g)) {
+    if (inside === "disclosure" || inside === "template") continue;
+    if (!inside.startsWith("check:")) {
+      problems.push(`the mark \`${mark}\` is not known`);
+      continue;
+    }
+    const [name = "", ...words] = inside.slice("check:".length).split(" ");
+    const check = campaign.checks.find((c) => c.name === name);
+    if (check === undefined) {
+      problems.push(`the mark \`${mark}\`: the campaign has no check \`${name}\``);
+      continue;
+    }
+    for (let i = 0; i < words.length; i++) {
+      const flag = check.flags?.find((f) => f.name === words[i]);
+      if (flag === undefined) problems.push(`the mark \`${mark}\`: the check \`${name}\` has no flag \`${words[i] ?? ""}\``);
+      else if (flag.value) i++;
+    }
+  }
+  return problems;
+}
 
 /** The description with each mark replaced, as `render.ts` makes it. */
 export function fakeRender(body: string, attr: string, pr: number | null): string {

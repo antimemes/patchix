@@ -8,7 +8,16 @@ const campaign = CampaignSchema.parse({
   title: "t",
   issue: { repo: "NixOS/nixpkgs", number: 576541 },
   branch_prefix: "cacert/",
-  checks: [{ name: "harness", command: "true", pass: "FIXED", reviewer: "nix run harness -- {attr} --pr {pr}" }],
+  checks: [
+    {
+      name: "harness",
+      command: "true",
+      pass: "FIXED",
+      reviewer: "nix run harness -- {attr} --pr {pr}",
+      flags: [{ name: "--force-build" }, { name: "--shim", value: true }, { name: "--no-system-store" }],
+    },
+    { name: "build", command: "true", pass: "." },
+  ],
 });
 
 test("modelName", () => {
@@ -42,31 +51,82 @@ test("render replaces each mark", () => {
     checks: new Map([["harness", "VERDICT foo: FIXED\n"]]),
     models: ["claude-opus-5-5"],
   });
-  assert.match(out, /I established confidence in this output: by manual review of the code change and of this description/);
-  assert.match(out, /nix run harness -- foo --pr <this PR>/);
-  assert.match(out, /```console\nVERDICT foo: FIXED\n```/);
-  assert.match(out, /## Things done/);
-  assert.doesNotMatch(out, /\{\{/);
-  const numbered = render({ body: "see {pr}", campaign, attr: "foo", pr: 42, checks: new Map(), models: [] });
-  assert.equal(numbered, "see 42\n");
+  assert.deepEqual(out.problems, []);
+  assert.match(out.text, /I established confidence in this output: by manual review of the code change and of this description/);
+  assert.match(out.text, /nix run harness -- foo --pr <this PR>/);
+  assert.match(out.text, /```console\nVERDICT foo: FIXED\n```/);
+  assert.match(out.text, /## Things done/);
+  assert.doesNotMatch(out.text, /\{\{/);
+  assert.deepEqual(render({ body: "see {pr}", campaign, attr: "foo", pr: 42, checks: new Map(), models: [] }), { text: "see 42\n", problems: [] });
 });
 
-test("a check mark with flags appends them to the reviewer command", () => {
-  const draw = (body: string) => render({ body, campaign, attr: "foo", pr: 7, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
+/** The description of `body`, with the output of `harness` and the pull request 7. */
+const draw = (body: string) => render({ body, campaign, attr: "foo", pr: 7, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
+
+test("a check mark with flags of the check appends them to the reviewer command, in the sequence of the mark", () => {
   const one = draw("{{check:harness --force-build}}");
-  assert.match(one, /```sh\nnix run harness -- foo --pr 7 --force-build\n```/);
-  assert.match(one, /<details>\n<summary>Output of harness: foo<\/summary>\n\n```console\nVERDICT foo: FIXED\n```\n\n<\/details>/);
-  const more = draw("{{check:harness --force-build --shim julia-bin --foo=bar ./x}}");
-  assert.match(more, /```sh\nnix run harness -- foo --pr 7 --force-build --shim julia-bin --foo=bar \.\/x\n```/);
-  assert.match(more, /```console\nVERDICT foo: FIXED\n```/);
+  assert.deepEqual(one.problems, []);
+  assert.match(one.text, /```sh\nnix run harness -- foo --pr 7 --force-build\n```/);
+  assert.match(one.text, /<details>\n<summary>Output of harness: foo<\/summary>\n\n```console\nVERDICT foo: FIXED\n```\n\n<\/details>/);
+  const value = draw("{{check:harness --shim julia-bin}}");
+  assert.deepEqual(value.problems, []);
+  assert.match(value.text, /```sh\nnix run harness -- foo --pr 7 --shim julia-bin\n```/);
+  const all = draw("{{check:harness --no-system-store --shim python-wheel_2.1 --force-build}}");
+  assert.deepEqual(all.problems, []);
+  assert.match(all.text, /```sh\nnix run harness -- foo --pr 7 --no-system-store --shim python-wheel_2\.1 --force-build\n```/);
+  assert.match(all.text, /```console\nVERDICT foo: FIXED\n```/);
+  // A check without a reviewer command has no `sh` block.
+  assert.deepEqual(draw("{{check:build}}").problems, []);
+  assert.doesNotMatch(draw("{{check:build}}").text, /```sh/);
 });
 
-test("a check mark that does not agree with the grammar becomes a comment", () => {
-  for (const mark of ['{{check:harness "x"}}', "{{check:harness  --two-spaces}}", "{{check:harness }}", "{{check: harness}}", "{{check:}}", "{{check:harness -->}}"]) {
-    const out = render({ body: mark, campaign, attr: "foo", pr: null, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
-    assert.equal(out, `<!-- patchix: the mark ${mark.replace(/>/g, "&gt;")} is not valid: see the Marks line of the page -->\n`);
-    assert.doesNotMatch(out, /```/);
+test("a mark that does not agree with the rules gives a problem and stays in the text", () => {
+  const cases: [string, string[]][] = [
+    ["{{check:harness --whatever}}", ["the check `harness` has no flag `--whatever`"]],
+    ["{{check:harness x}}", ["the check `harness` has no flag `x`"]],
+    ["{{check:build --force-build}}", ["the check `build` has no flag `--force-build`"]],
+    ["{{check:harness --shim}}", ["the flag `--shim` needs a value"]],
+    ["{{check:harness --shim --force-build}}", ["the flag `--shim` needs a value"]],
+    ["{{check:harness --shim ./x.nix}}", ["the value `./x.nix` of the flag `--shim` must contain only `A-Za-z0-9._-`"]],
+    ["{{check:harness --force-build yes}}", ["the flag `--force-build` takes no value"]],
+    ["{{check:harness --force-build --force-build}}", ["the flag `--force-build` occurs two times"]],
+    ["{{check:harness --shim a --shim b}}", ["the flag `--shim` occurs two times"]],
+    ["{{check:harness --whatever --shim}}", ["the check `harness` has no flag `--whatever`", "the flag `--shim` needs a value"]],
+    ["{{check:other}}", ["the campaign has no check `other`"]],
+    ["{{check:other --force-build}}", ["the campaign has no check `other`"]],
+    ["{{check:harness  --force-build}}", ["two spaces"]],
+    ["{{check:harness }}", ["a space at the end"]],
+    ["{{check: harness}}", ["a space at the start"]],
+    ["{{check:harness\t--force-build}}", ["a tab or a line break"]],
+    ["{{check:harness\n--force-build}}", ["a tab or a line break"]],
+    ["{{check:}}", ["no check name"]],
+  ];
+  for (const [mark, problems] of cases) {
+    const out = draw(`Before.\n\n${mark}\n\nAfter.`);
+    assert.deepEqual(out.problems, problems.map((p) => `the mark \`${mark}\`: ${p}`), mark);
+    assert.equal(out.text, `Before.\n\n${mark}\n\nAfter.\n`, `the text keeps ${mark}`);
   }
-  const unknown = render({ body: "{{check:other --force-build}}", campaign, attr: "foo", pr: null, checks: new Map(), models: [] });
-  assert.equal(unknown, "<!-- patchix: the campaign has no check other -->\n");
+});
+
+test("a different mark is not known", () => {
+  for (const mark of ["{{foo}}", "{{Disclosure}}", "{{ template }}", "{{pr}}", "{{}}"]) {
+    const out = draw(`see ${mark}`);
+    assert.deepEqual(out.problems, [`the mark \`${mark}\` is not known`], mark);
+    assert.equal(out.text, `see ${mark}\n`);
+  }
+  // The mark has `{` and `}` in it: `{pr}` is replaced, but the mark is not.
+  const nested = draw("{{check:harness --shim {pr}}} and {{disclosure}}");
+  assert.deepEqual(nested.problems, ["the mark `{{check:harness --shim {pr}}}` is not known"]);
+  assert.match(nested.text, /^\{\{check:harness --shim 7\}\} and > \[!NOTE\]/);
+  // Each problem, in the sequence of the text. A correct mark between them is replaced.
+  const two = draw("{{foo}} {{check:harness --force-build}} {{check:harness --bar}}");
+  assert.deepEqual(two.problems, ["the mark `{{foo}}` is not known", "the mark `{{check:harness --bar}}`: the check `harness` has no flag `--bar`"]);
+  assert.match(two.text, /^\{\{foo\}\} ```sh\nnix run harness -- foo --pr 7 --force-build\n```/);
+  assert.match(two.text, /<\/details> \{\{check:harness --bar\}\}\n$/);
+});
+
+test("the output of a check is data: its marks give no problem and are not replaced", () => {
+  const out = render({ body: "{{check:harness}}", campaign, attr: "foo", pr: 7, checks: new Map([["harness", "{{foo}} {{template}} {pr}\n"]]), models: [] });
+  assert.deepEqual(out.problems, []);
+  assert.match(out.text, /```console\n\{\{foo\}\} \{\{template\}\} \{pr\}\n```/);
 });

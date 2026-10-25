@@ -20,6 +20,19 @@ export const GIT_URL = /^(https|file):\/\/\S+$/;
 /** A GitHub login, for example `someone`: 39 signs or less, and each sign is in `A-Z`, `a-z`, `0-9` or `-`. */
 export const GITHUB_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
+/** The name of a flag of a check, for example `--force-build`. */
+export const FLAG_NAME = /^--[a-z][a-z0-9-]*$/;
+/** The value of a flag in a check mark, for example `julia-bin`. */
+export const FLAG_VALUE = /^[A-Za-z0-9._-]+$/;
+
+/** A flag of a check: see `Check.flags`. */
+export const CheckFlagSchema = z.object({
+  name: z.string().regex(FLAG_NAME),
+  /** `true`: the flag has one value after it, and the value agrees with `FLAG_VALUE`. `false`: the flag has no value. */
+  value: z.boolean().default(false),
+});
+export type CheckFlag = z.infer<typeof CheckFlagSchema>;
+
 /** A check is a command that gives the signal: the fix is correct, or it is not. */
 export const CheckSchema = z.object({
   name: Name,
@@ -35,6 +48,12 @@ export const CheckSchema = z.object({
    * `{attr}` and `{pr}` are replaced. `{pr}` is `<this PR>` until the pull request is made.
    */
   reviewer: z.string().min(1).optional(),
+  /**
+   * The flags that a person can add to the check mark of a description, for example
+   * `{{check:harness --shim julia-bin}}`. They go to the end of the `reviewer` command. A check without flags accepts
+   * no flag in its mark. See `render` in the fleet package.
+   */
+  flags: z.array(CheckFlagSchema).optional(),
   /** The time limit of one check. */
   timeout_minutes: z.number().int().positive().default(60),
 });

@@ -104,13 +104,14 @@ export function mockClient(options: MockOptions): Client {
   const jobsView = (s: State): JobsView => ({ jobs: s.jobs, queue: s.queue, fleet: s.fleet });
   const jobsChanged = (s: State) => emit({ type: "jobs", campaign: s.campaign.name, ...structuredClone(jobsView(s)) });
 
-  /** As the server: each read of the task lints the draft. */
+  /** As the server: each read of the task lints the draft and examines its marks. */
   function detail(s: State, attr: string): TaskDetail {
     const t = taskOf(s, attr);
     const draft = t.pr_meta === null ? null : (s.drafts.get(attr) ?? null);
     const rendered = draft === null || t.pr_meta === null ? null : f.fakeRender(draft, attr, t.pr_meta.number);
     const lint = draft === null ? null : f.fakeLint(draft);
-    return { campaign: s.campaign, task: t, asks: s.asks.get(attr) ?? [], draft, rendered, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
+    const marks = draft === null ? [] : f.fakeMarkProblems(draft, s.campaign);
+    return { campaign: s.campaign, task: t, asks: s.asks.get(attr) ?? [], draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
   }
   const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, tasks: s.tasks });
 
@@ -284,6 +285,8 @@ export function mockClient(options: MockOptions): Client {
       const t = taskOf(s, attr);
       const meta = t.pr_meta ?? fail(400, `the task ${attr} has no draft`);
       if (meta.number !== null && meta.state !== "open") fail(409, `the pull request #${meta.number} is ${meta.state}`);
+      const marks = f.fakeMarkProblems(s.drafts.get(attr) ?? "", s.campaign);
+      if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
       const job = s.jobs.find((j) => j.attr === attr);
       if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
       const run = t.runs[0];

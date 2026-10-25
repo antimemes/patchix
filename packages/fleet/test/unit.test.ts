@@ -496,7 +496,7 @@ test("renderDraft hides the local directories in the output of a check", async (
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, output);
 
-    const rendered = (await renderDraft(ctx, "t", "foo")) ?? "";
+    const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
     assert.ok(rendered.includes("after: worktree <worktree>\nlog: <patchix>/state/t/x.txt\ncode: <patchix>/packages\n"), rendered);
     assert.ok(!rendered.includes(tmp), "the description has no local path");
     assert.equal(await readFile(file, "utf8"), output, "the stored output does not change");
