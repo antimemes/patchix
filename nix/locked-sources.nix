@@ -1,5 +1,5 @@
-# The inputs of flake.lock, for `nix-build` and `nix-shell` without flakes. Thus they use the same nixpkgs and
-# the same memelint as the flake. This file reads only the `github` and `tarball` inputs.
+# The inputs of flake.lock, for `nix-build` and `nix-shell` without flakes. Thus they use the same nixpkgs, the same
+# memelint and the same `zellij` as the flake. This file reads only the `github` and `tarball` inputs.
 { lockFile ? ../flake.lock }:
 let
   lock = builtins.fromJSON (builtins.readFile lockFile);

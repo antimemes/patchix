@@ -11,9 +11,13 @@
       url = "github:antimemes/memelint/bf5518cc9e43ae2afd3b6252d06daa2ac7176934";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # `zellij` 0.45 removes the tabs that patchix opens before a person attaches to the session (zellij-org/zellij#5594).
+    # This commit of `nixos-unstable` has `zellij` 0.44.3, and cache.nixos.org has its build. Remove this input when a
+    # release has the fix (zellij-org/zellij#5612).
+    nixpkgs-zellij.url = "github:NixOS/nixpkgs/1055f58374f42fd07626aec0ef4fb1d658add341";
   };
 
-  outputs = { self, nixpkgs, memelint }:
+  outputs = { self, nixpkgs, memelint, nixpkgs-zellij }:
     let
       forAllSystems = f: nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ]
         (system: f system nixpkgs.legacyPackages.${system});
@@ -22,6 +26,7 @@
       packages = forAllSystems (system: pkgs: {
         default = pkgs.callPackage ./nix/package.nix {
           memelint = memelint.packages.${system}.default;
+          zellij = nixpkgs-zellij.legacyPackages.${system}.zellij;
           version = "0-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
         };
       });
@@ -35,7 +40,11 @@
       });
 
       devShells = forAllSystems (system: pkgs: {
-        default = import ./shell.nix { inherit pkgs; memelint = memelint.packages.${system}.default; };
+        default = import ./shell.nix {
+          inherit pkgs;
+          memelint = memelint.packages.${system}.default;
+          zellij = nixpkgs-zellij.legacyPackages.${system}.zellij;
+        };
       });
     };
 }

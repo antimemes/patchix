@@ -34,10 +34,27 @@
         "url": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
       }
     },
+    "nixpkgs-zellij": {
+      "locked": {
+        "lastModified": 1786751896,
+        "narHash": "sha256-sNJSdCoaWjCF7q8Le03pfQQibqGB+NTRpRY7qJw03Qk=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1055f58374f42fd07626aec0ef4fb1d658add341",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "1055f58374f42fd07626aec0ef4fb1d658add341",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "memelint": "memelint",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "nixpkgs-zellij": "nixpkgs-zellij"
       }
     }
   },
