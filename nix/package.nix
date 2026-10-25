@@ -6,6 +6,7 @@
 , fetchPnpmDeps
 , pnpmConfigHook
 , writeShellApplication
+, callPackage
 , git
 , gh
 , zellij
@@ -22,10 +23,10 @@ let
 
   # The command `patchix`: the web page and the API at http://127.0.0.1:8788/. The package replaces `@root@` with
   # the path of its files.
-  # `nix` and `claude` come from the `PATH` of the host.
+  # `nix` and `claude` come from the `PATH` of the host. `brotli-check` is the check of `campaigns/brotli`.
   wrapper = writeShellApplication {
     name = "patchix";
-    runtimeInputs = [ nodejs git gh zellij memelint ];
+    runtimeInputs = [ nodejs git gh zellij memelint (callPackage ../campaigns/brotli/check.nix { }) ];
     excludeShellChecks = [ "SC1090" "SC1091" ];
     text = ''
       export PATCHIX_ROOT=@root@

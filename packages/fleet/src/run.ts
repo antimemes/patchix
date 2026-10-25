@@ -48,7 +48,7 @@ async function campaignInstructions(ctx: Ctx, name: string): Promise<string> {
  * question at the end, with its instructions. `run` gives the base, the model and the question.
  */
 async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, run: Run, worktree: string, dir: string, full: boolean): Promise<string> {
-  const values = { attr: task.attr, base: run.base, after: "HEAD", root: ctx.root };
+  const values = { attr: task.attr, base: run.base, after: "HEAD" };
   const entry = [task.pr === null ? null : `#${task.pr}`, task.remark].filter((x) => x !== null).join(" ");
   const block = [
     "# The task",
@@ -169,7 +169,7 @@ async function execute(ctx: Ctx, campaign: Campaign, task: Task, first: Run, dir
     if (run.question !== null && tip === start && tipRun(earlier, tip) !== undefined) log("the tip of the branch did not move, and a previous run has its checks: no checks");
     else if (errors.length === 0 && problems.length === 0 && !wontfix && !signal?.aborted) {
       await writeRun(ctx, campaign.name, run);
-      checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base, root: ctx.root }, signal, log });
+      checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base }, signal, log });
       for (const c of checks) if (c.status === "error") errors.push(`check ${c.name}: error`);
       unverified = checks.some((c) => c.status === "fail");
     }

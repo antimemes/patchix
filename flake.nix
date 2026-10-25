@@ -29,6 +29,8 @@
           zellij = nixpkgs-zellij.legacyPackages.${system}.zellij;
           version = "0-unstable-${builtins.substring 0 8 (self.lastModifiedDate or "19700101")}";
         };
+        # The check of `campaigns/brotli`. A person starts it with `nix run github:antimemes/patchix#brotli-check`.
+        brotli-check = pkgs.callPackage ./campaigns/brotli/check.nix { };
       });
 
       apps = forAllSystems (system: pkgs: {
@@ -36,6 +38,11 @@
           type = "app";
           program = pkgs.lib.getExe self.packages.${system}.default;
           meta.description = "patchix: the web page and the API at http://127.0.0.1:8788/";
+        };
+        brotli-check = {
+          type = "app";
+          program = pkgs.lib.getExe self.packages.${system}.brotli-check;
+          meta.description = "The check of the brotli campaign: brotli-check <attr> --pr <number>";
         };
       });
 

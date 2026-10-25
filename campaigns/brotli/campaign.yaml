@@ -11,14 +11,14 @@ labels:
   - "1.severity: security"
 timeout_minutes: 120
 checks:
-  # check.sh builds the package of the worktree ("after") and of the base ("before"), and examines each output with
-  # the standalone scanner of trailofbits/brotli-checker at a fixed commit. FIXED: the scanner finds a bad copy
-  # before and no bad copy after; check.sh tells the copies. MARKED INSECURE: `meta.knownVulnerabilities` has the
-  # CVE. NOT FIXED and UNKNOWN do not agree with `pass`: a person examines the output.
+  # `brotli-check` (check.nix and check.sh) builds the package of the worktree ("after") and of the base ("before"),
+  # and examines each output with the standalone scanner of trailofbits/brotli-checker at a fixed commit. FIXED: the
+  # scanner finds a bad copy before and no bad copy after; check.sh tells the copies. MARKED INSECURE:
+  # `meta.knownVulnerabilities` has the CVE. NOT FIXED and UNKNOWN do not agree with `pass`: a person examines the
+  # output. patchix gets `brotli-check` from its `PATH`. The `reviewer` command gets it from the flake of patchix, and
+  # its "after" is the pull request.
   - name: scanner
-    command: sh '{root}/campaigns/brotli/check.sh' {attr} {base}
+    command: brotli-check {attr} --base {base}
     pass: "^VERDICT {attr}: (FIXED|MARKED INSECURE)$"
-    reviewer: |-
-      out=$(nix-build --no-out-link -A {attr} https://github.com/NixOS/nixpkgs/archive/pull/{pr}/head.tar.gz)
-      curl -sL https://github.com/trailofbits/brotli-checker/archive/7a585c00589471351b6625a46574c7173720ada0.tar.gz | tar -xz && nix-shell -p python3 --run "python3 brotli-checker-7a585c00589471351b6625a46574c7173720ada0/skills/brotli-checker/scripts/brotli_inventory.py $(echo $out)"
+    reviewer: nix run github:antimemes/patchix#brotli-check -- {attr} --pr {pr}
     timeout_minutes: 120

@@ -7,13 +7,11 @@ import { fill } from "./render.ts";
 import { start } from "./proc.ts";
 import { checkFile } from "./store.ts";
 
-/** The values of the marks `{attr}`, `{base}`, `{after}` and `{root}`. */
+/** The values of the marks `{attr}`, `{base}` and `{after}`. */
 export interface CheckValues {
   attr: string;
   base: string;
   after: string;
-  /** The root of patchix. Thus a check can start a script of its campaign: `{root}/campaigns/<name>/<file>`. */
-  root: string;
 }
 
 export function escapeRegex(s: string): string {
@@ -22,7 +20,7 @@ export function escapeRegex(s: string): string {
 
 /** The `pass` expression with the marks replaced. The values are escaped: thus a `.` in an attribute agrees only with a `.`. */
 export function passRegex(pass: string, values: CheckValues): RegExp {
-  const escaped = { attr: escapeRegex(values.attr), base: escapeRegex(values.base), after: escapeRegex(values.after), root: escapeRegex(values.root) };
+  const escaped = { attr: escapeRegex(values.attr), base: escapeRegex(values.base), after: escapeRegex(values.after) };
   return new RegExp(fill(pass, { ...escaped }), "m");
 }
 

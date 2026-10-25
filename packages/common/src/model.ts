@@ -38,8 +38,7 @@ export const CheckSchema = z.object({
   name: Name,
   /**
    * The shell command. The runner starts it in the worktree with `sh -c`. These marks are replaced:
-   * `{attr}`, `{base}` (the commit before the fix), `{after}` (the commit of the fix), `{root}` (the root of patchix).
-   * With `{root}`, a check can start a script of its campaign, for example `sh '{root}/campaigns/brotli/check.sh'`.
+   * `{attr}`, `{base}` (the commit before the fix), `{after}` (the commit of the fix).
    */
   command: z.string().min(1),
   /** A regular expression. The check is `pass` when the output agrees with it. */

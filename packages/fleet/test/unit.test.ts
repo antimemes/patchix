@@ -280,11 +280,11 @@ test("tomlWords and withWords", () => {
 test("runId, parseWords and passRegex", () => {
   assert.equal(runId(new Date("2026-10-23T21:05:09.123Z")), "20261023-210509");
   assert.deepEqual(parseWords("JRE\n\n# comment\n JRE \nPEM\n"), ["JRE", "PEM"]);
-  const re = passRegex("^VERDICT {attr} emudhra: FIXED", { attr: "python3Packages.foo", base: "b", after: "a", root: "/r" });
+  const re = passRegex("^VERDICT {attr} emudhra: FIXED", { attr: "python3Packages.foo", base: "b", after: "a" });
   assert.ok(re.test("x\nVERDICT python3Packages.foo emudhra: FIXED\n"));
   assert.ok(!re.test("VERDICT python3PackagesXfoo emudhra: FIXED"));
-  const values = { attr: "lzbench", base: "b", after: "a", root: "/r" };
-  assert.equal(checkCommand("sh '{root}/campaigns/brotli/check.sh' {attr} {base}", values), "sh '/r/campaigns/brotli/check.sh' lzbench b");
+  const values = { attr: "lzbench", base: "b", after: "a" };
+  assert.equal(checkCommand("brotli-check {attr} --base {base}", values), "brotli-check lzbench --base b");
 });
 
 test("the KDL layout of a tab", () => {

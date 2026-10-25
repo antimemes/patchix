@@ -9,8 +9,10 @@ in
 , zellij ? (import lockedSources.nixpkgs-zellij { inherit (pkgs.stdenv.hostPlatform) system; }).zellij
 }:
 pkgs.mkShell {
-  # Chromium records the tour video. nixpkgs has it only for Linux.
-  packages = with pkgs; [ nodejs pnpm git jq gh go-task zellij memelint ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux chromium;
+  # Chromium records the tour video. nixpkgs has it only for Linux. `brotli-check` is the check of
+  # `campaigns/brotli`: thus `task run` finds it.
+  packages = with pkgs; [ nodejs pnpm git jq gh go-task zellij memelint (callPackage ./campaigns/brotli/check.nix { }) ]
+    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux chromium;
   shellHook = ''
     # GH_TOKEN is in .env (not in git).
     if [ -f .env ]; then set -a; . ./.env; set +a; fi
