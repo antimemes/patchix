@@ -50,3 +50,23 @@ test("render replaces each mark", () => {
   const numbered = render({ body: "see {pr}", campaign, attr: "foo", pr: 42, checks: new Map(), models: [] });
   assert.equal(numbered, "see 42\n");
 });
+
+test("a check mark with flags appends them to the reviewer command", () => {
+  const draw = (body: string) => render({ body, campaign, attr: "foo", pr: 7, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
+  const one = draw("{{check:harness --force-build}}");
+  assert.match(one, /```sh\nnix run harness -- foo --pr 7 --force-build\n```/);
+  assert.match(one, /<details>\n<summary>Output of harness: foo<\/summary>\n\n```console\nVERDICT foo: FIXED\n```\n\n<\/details>/);
+  const more = draw("{{check:harness --force-build --shim julia-bin --foo=bar ./x}}");
+  assert.match(more, /```sh\nnix run harness -- foo --pr 7 --force-build --shim julia-bin --foo=bar \.\/x\n```/);
+  assert.match(more, /```console\nVERDICT foo: FIXED\n```/);
+});
+
+test("a check mark that does not agree with the grammar becomes a comment", () => {
+  for (const mark of ['{{check:harness "x"}}', "{{check:harness  --two-spaces}}", "{{check:harness }}", "{{check: harness}}", "{{check:}}", "{{check:harness -->}}"]) {
+    const out = render({ body: mark, campaign, attr: "foo", pr: null, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
+    assert.equal(out, `<!-- patchix: the mark ${mark.replace(/>/g, "&gt;")} is not valid: see the Marks line of the page -->\n`);
+    assert.doesNotMatch(out, /```/);
+  }
+  const unknown = render({ body: "{{check:other --force-build}}", campaign, attr: "foo", pr: null, checks: new Map(), models: [] });
+  assert.equal(unknown, "<!-- patchix: the campaign has no check other -->\n");
+});

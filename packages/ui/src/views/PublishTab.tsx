@@ -236,7 +236,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
             onValueChange={(description) => change({ description })}
             description={
               <>
-                Marks: <code>{"{{disclosure}}"}</code> <code>{"{{check:NAME}}"}</code> <code>{"{{template}}"}</code> <code>{"{pr}"}</code>
+                Marks: <code>{"{{disclosure}}"}</code> <code>{"{{check:NAME}}"}</code> <code>{"{{check:NAME --flag}}"}</code> <code>{"{{template}}"}</code> <code>{"{pr}"}</code>
               </>
             }
           />

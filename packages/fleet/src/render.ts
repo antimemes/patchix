@@ -4,6 +4,9 @@
  * `pr.md` can contain these marks:
  * - `{{disclosure}}`: the AI disclosure block.
  * - `{{check:NAME}}`: the reviewer command of the check NAME and its output in a `<details>` block.
+ * - `{{check:NAME FLAG FLAG}}`: the same, with the flags at the end of the reviewer command. NAME is `[A-Za-z0-9_-]+`,
+ *   each flag is `[A-Za-z0-9=./_-]+`, and one space is between two parts. A mark that does not agree with this
+ *   grammar becomes the text `<!-- patchix: the mark ... is not valid ... -->`.
  * - `{{template}}`: the task list of the pull request template of nixpkgs.
  * - `{pr}`: the pull request number, or `<this PR>` until the pull request is made.
  */
@@ -63,13 +66,18 @@ export function fill(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (whole, key: string) => values[key] ?? whole);
 }
 
-function checkBlock(input: RenderInput, name: string): string {
+/** The text of a check mark. `mark` is the full mark, and `inside` is the text after `check:`. */
+function checkBlock(input: RenderInput, mark: string, inside: string): string {
+  const [name = "", ...flags] = inside.split(" ");
+  // Without `>`, the text of the mark cannot contain `-->`.
+  if (!/^[A-Za-z0-9_-]+$/.test(name) || !flags.every((f) => /^[A-Za-z0-9=./_-]+$/.test(f)))
+    return `<!-- patchix: the mark ${mark.replace(/>/g, "&gt;")} is not valid: see the Marks line of the page -->`;
   const check = input.campaign.checks.find((c) => c.name === name);
   if (!check) return `<!-- patchix: the campaign has no check ${name} -->`;
   const output = input.checks.get(name) ?? "<no output>";
   const values = { attr: input.attr, pr: input.pr === null ? "<this PR>" : String(input.pr) };
   const lines: string[] = [];
-  if (check.reviewer) lines.push("```sh", fill(check.reviewer, values), "```", "");
+  if (check.reviewer) lines.push("```sh", [fill(check.reviewer, values), ...flags].join(" "), "```", "");
   const f = fence(output);
   lines.push("<details>", `<summary>Output of ${name}: ${input.attr}</summary>`, "", `${f}console`, output.trimEnd(), f, "", "</details>");
   return lines.join("\n");
@@ -79,7 +87,7 @@ export function render(input: RenderInput): string {
   const pr = input.pr === null ? "<this PR>" : String(input.pr);
   return input.body
     .replace(/\{\{disclosure\}\}/g, () => disclosure(input.models))
-    .replace(/\{\{check:([^}]+)\}\}/g, (_, name: string) => checkBlock(input, name.trim()))
+    .replace(/\{\{check:([^}]*)\}\}/g, (mark: string, inside: string) => checkBlock(input, mark, inside))
     .replace(/\{\{template\}\}/g, () => TEMPLATE)
     .replace(/\{pr\}/g, pr)
     .trimEnd()
