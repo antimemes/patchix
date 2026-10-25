@@ -55,13 +55,18 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Todo: Story = {
-  parameters: { docs: { description: { story: "1. Work tab, todo: no run. The issue entry shows the tick box, the paths, the notes and the branch. The Queue button adds the task to the queue." } } },
+  parameters: { docs: { description: { story: "1. Work tab, todo: no run. The issue entry shows the tick box, the paths, the notes and the branch. The Run button adds the task to the queue, with the question of the text area or without a question." } } },
   decorators: [seed(() => task(A))],
 };
 
 export const Queued: Story = {
-  parameters: { docs: { description: { story: "Work tab: the task waits in the queue after one other task. The button removes it from the queue." } } },
+  parameters: { docs: { description: { story: "Work tab: the task waits in the queue after one other task. The Run button is disabled, and the Remove from queue button removes the task from the queue." } } },
   decorators: [seed(() => task(A, { state: "failed", runs: [failedRun(A, 40)], head: HEAD }), { queue: ["calibre", A], fleet: true })],
+  play: async ({ canvas }) => {
+    await canvas.findByText("The task is in the queue.");
+    await expect(canvas.getByRole("button", { name: "Run" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Remove from queue" })).toBeEnabled();
+  },
 };
 
 export const Running: Story = {
@@ -144,22 +149,42 @@ export const RunPrompt: Story = {
   },
 };
 
+/** The campaign has the number of jobs of the `concurrency`: the run stays in the queue. */
+const fullCampaign = seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }), {
+  jobs: [job("calibre", 4), job("anki", 1)],
+});
+
+export const RunQueued: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: each job place of the campaign is in use. The person clicks Run without a question: the task goes into the queue, and the run list starts with the queued run. The fleet starts a usual run when a job stops.",
+      },
+    },
+  },
+  decorators: [fullCampaign],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Run" }));
+    const runs = await canvas.findByRole("region", { name: "Runs" });
+    await within(runs).findByText("The run waits in the queue.");
+    await within(runs).findByText("queued");
+    await canvas.findByText("The task is in the queue.");
+    await expect(canvas.getByRole("button", { name: "Run" })).toBeDisabled();
+  },
+};
+
 export const QuestionQueued: Story = {
   parameters: {
     docs: {
       description: {
-        story: "Work tab: each job place of the campaign is in use. The person asks a question: the task goes into the queue, and the run list starts with the queued run and its question. The fleet starts the run when a job stops.",
+        story: "Work tab: each job place of the campaign is in use. The person writes a question and clicks Run: the task goes into the queue, and the run list starts with the queued run and its question. The fleet starts the run when a job stops.",
       },
     },
   },
-  decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }), {
-      jobs: [job("calibre", 4), job("anki", 1)],
-    }),
-  ],
+  decorators: [fullCampaign],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.type(await canvas.findByPlaceholderText("A question for the agent"), QUESTION);
-    await userEvent.click(canvas.getByRole("button", { name: "Ask" }));
+    await userEvent.type(await canvas.findByPlaceholderText("A question for the agent (optional)"), QUESTION);
+    await userEvent.click(canvas.getByRole("button", { name: "Run" }));
     const runs = await canvas.findByRole("region", { name: "Runs" });
     await within(runs).findByText(QUESTION);
     await within(runs).findByText("queued");

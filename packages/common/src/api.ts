@@ -33,10 +33,12 @@
  *   queue, with its question (see `dequeue`). When the task is not in the queue, it stops the job of the task. It
  *   gives `JobsView`, or 404 when the task has no entry and no job. `DELETE /api/campaigns/:c/queue` removes each
  *   entry of the queue and gives `JobsView`.
- * - `POST /api/campaigns/:c/tasks/:attr/question` with a `QuestionInput` body writes the question into `question.md`
- *   of the task directory and adds the task to the queue. Then it starts the fleet as `POST .../jobs` does, and gives
- *   `JobsView` with status 202. The next run of the task gets the question: see `RunSchema.question`. A task with a
- *   job or with an entry in the queue gives 409: the person asks again after the run.
+ * - `POST /api/campaigns/:c/tasks/:attr/run` with a `RunInput` body adds the task to the queue for one run. With a
+ *   question, it first writes the question into `question.md` of the task directory: the next run of the task gets it
+ *   (see `RunSchema.question`). Without a question, it writes no `question.md` and removes a `question.md` that is there:
+ *   the run is a usual run. A request without a body is a request without a question. Then it starts the fleet as
+ *   `POST .../jobs` does, and gives `JobsView` with status 202. A task with a job or with an entry in the queue gives
+ *   409: the person starts the run after the job. See `queueRun` in the fleet package.
  * - `PUT /api/campaigns/:c/tasks/:attr/draft` with a `DraftInput` body writes `pr.yaml` and `pr.md` and gives
  *   `TaskDetail`, with the findings of memelint on the new `pr.md` in `lint`. `POST .../draft` without a body
  *   makes the draft from the newest run with a description and from the tip of the branch (see `makeDraft`). It
@@ -213,10 +215,13 @@ export const CommitSchema = z.object({
 });
 export type Commit = z.infer<typeof CommitSchema>;
 
-export const QuestionInputSchema = z.object({
-  question: z.string().trim().min(1).max(4000),
+/** The body of `POST .../tasks/:attr/run`. */
+export const RunInputSchema = z.object({
+  /** The question of a person for the run. An empty string, or only spaces: a run without a question. */
+  question: z.string().trim().max(4000).default(""),
 });
-export type QuestionInput = z.infer<typeof QuestionInputSchema>;
+/** The body that a client sends: without `question`, the server uses an empty string. */
+export type RunInput = z.input<typeof RunInputSchema>;
 
 export const DraftInputSchema = z.object({
   title: z.string().trim().min(1),

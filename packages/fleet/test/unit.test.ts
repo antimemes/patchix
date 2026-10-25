@@ -15,7 +15,6 @@ import { parseLint, withWords } from "../src/lint.ts";
 import { refreshPrs, renderDraft } from "../src/pr.ts";
 import { parseWords } from "../src/run.ts";
 import {
-  addQuestion,
   alive,
   checkFile,
   clearQueue,
@@ -27,6 +26,7 @@ import {
   listRuns,
   queueDir,
   questionFile,
+  queueRun,
   readCampaign,
   readPr,
   readSettings,
@@ -407,20 +407,29 @@ test("a running record without a live runner is read as stopped, and the file do
   }
 });
 
-test("the question of a person waits in the task directory until a run takes it, and it goes away with the entry", async () => {
+test("the question of a person waits in the task directory until a run takes it, it goes away with the entry, and a run without a question has no question", async () => {
   const root = await mkdtemp(join(tmpdir(), "patchix-question-"));
   const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
   const runner = await markerProcess("run t foo");
   try {
-    await addQuestion(ctx, "t", "foo", " Why? \n");
+    await queueRun(ctx, "t", "foo", " Why? \n");
     assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n");
     assert.deepEqual(await listQueue(ctx, "t"), ["foo"], "the question adds the task to the queue");
-    await assert.rejects(addQuestion(ctx, "t", "foo", "Again?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo is in the queue");
+    await assert.rejects(queueRun(ctx, "t", "foo", "Again?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo is in the queue");
+    await assert.rejects(queueRun(ctx, "t", "foo"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo is in the queue");
     assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "the second question does not replace the first");
     assert.equal(await dequeue(ctx, "t", "foo"), true);
     assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the question goes away with the entry");
 
-    await addQuestion(ctx, "t", "foo", "Is the symlink enough?");
+    await queueRun(ctx, "t", "foo");
+    assert.deepEqual([await listQueue(ctx, "t"), await exists(questionFile(ctx, "t", "foo"))], [["foo"], false], "a run without a question adds the entry and writes no question.md");
+    await dequeue(ctx, "t", "foo");
+    await writeFile(questionFile(ctx, "t", "foo"), "An old question?\n");
+    await queueRun(ctx, "t", "foo", " \n");
+    assert.deepEqual([await listQueue(ctx, "t"), await exists(questionFile(ctx, "t", "foo"))], [["foo"], false], "a run without a question removes a question.md without an entry");
+    await dequeue(ctx, "t", "foo");
+
+    await queueRun(ctx, "t", "foo", "Is the symlink enough?");
     const id = "20260101-000001";
     await mkdir(runDir(ctx, "t", "foo", id), { recursive: true });
     assert.equal(await takeQuestion(ctx, "t", "foo", id), "Is the symlink enough?");
@@ -429,7 +438,7 @@ test("the question of a person waits in the task directory until a run takes it,
     await dequeue(ctx, "t", "foo");
 
     await writeRun(ctx, "t", { ...run("running", id, runner.pid ?? null), question: "Is the symlink enough?" });
-    await assert.rejects(addQuestion(ctx, "t", "foo", "Why?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo has a job");
+    await assert.rejects(queueRun(ctx, "t", "foo", "Why?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo has a job");
     assert.deepEqual([await listQueue(ctx, "t"), await exists(questionFile(ctx, "t", "foo"))], [[], false]);
   } finally {
     runner.kill();

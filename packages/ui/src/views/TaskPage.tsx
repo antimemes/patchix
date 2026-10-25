@@ -58,7 +58,6 @@ function CommitProblemsNotice({ problems }: { problems: CommitProblems[] }) {
 
 export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string }) {
   const client = useClient();
-  const toast = useToast();
   const [tab, setTab] = useTab();
   const detail = useLoad(() => client.task(c, attr), `task:${c}/${attr}`);
   const jobs = useLoad(() => client.jobs(c), `jobs:${c}`);
@@ -76,23 +75,12 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
     }
   });
   const place = jobs.data?.queue.indexOf(attr) ?? -1;
-  const start = useAction(async () => {
-    jobs.replace(await client.queueRuns(c, { attrs: [attr] }));
-    toast(`${attr} is in the queue`, "The fleet starts the run in a free job place.");
-  });
-  const stop = useAction(async () => {
-    const queued = place >= 0;
-    jobs.replace(await client.stopJob(c, attr));
-    detail.reload();
-    toast(queued ? `${attr} is not in the queue now` : `The job of ${attr} stops`);
-  });
 
   if (detail.data === null) {
     return detail.error !== null ? <Notice tone="error">{detail.error}</Notice> : <Progress value={null} label="Loading the task" />;
   }
   const { task, campaign } = detail.data;
   const job = (jobs.data?.jobs ?? []).find((j) => j.attr === attr) ?? null;
-  const busy = job !== null ? "A job of this task operates." : place >= 0 ? "The task is in the queue." : null;
   return (
     <div className="stack">
       <header className="task-title">
@@ -120,13 +108,11 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
               <div className="stack-lg">
                 <section className="panel" aria-label="Task">
                   <IssueEntry task={task} repo={campaign.issue.repo} hasSource={campaign.source !== undefined} />
-                  <JobRow job={job} place={place} runs={task.runs.length} starting={start.pending} stopping={stop.pending} onRun={() => void start.run()} onStop={() => void stop.run()} />
-                  {start.error !== null && <Notice tone="error">Queue: {start.error}</Notice>}
-                  {stop.error !== null && <Notice tone="error">Stop: {stop.error}</Notice>}
-                  <QuestionRow
+                  <RunRow
                     campaign={c}
                     attr={attr}
-                    busy={busy}
+                    job={job}
+                    place={place}
                     onJobs={(view) => {
                       jobs.replace(view);
                       detail.reload();
@@ -191,86 +177,79 @@ function IssueEntry({ task, repo, hasSource }: { task: TaskView; repo: string; h
   );
 }
 
-interface JobRowProps {
+/** The longest question: see `RunInput`. */
+const MAX_QUESTION = 4000;
+/** The text below the Run button when a click adds the task to the queue. */
+const RUN_HINT = "The task goes into the queue. With a question, the next run continues the session of the agent.";
+
+interface RunRowProps {
+  campaign: string;
+  attr: string;
   job: JobStatus | null;
   /** The position of the run entry of the task in the queue, from 0. -1 when the queue does not have it. */
   place: number;
-  runs: number;
-  starting: boolean;
-  stopping: boolean;
-  onRun: () => void;
-  onStop: () => void;
-}
-
-/** The Queue and Stop buttons, the job of the task when it has one, and its position in the queue. */
-function JobRow({ job, place, runs, starting, stopping, onRun, onStop }: JobRowProps) {
-  const reason = job !== null ? "A job of this task operates." : place >= 0 ? "The task is in the queue." : "Add the task to the queue. The fleet starts the run.";
-  return (
-    <div className="row">
-      <Button variant="primary" onClick={onRun} disabled={job !== null || place >= 0} pending={starting} title={reason}>
-        {runs === 0 ? "Queue" : "Queue again"}
-      </Button>
-      {job === null && place >= 0 && (
-        <>
-          <Button variant="danger" pending={stopping} onClick={onStop}>
-            Remove from queue
-          </Button>
-          <span className="small muted">{place === 0 ? "The task is the first in the queue." : `The queue has ${place} ${place === 1 ? "entry" : "entries"} before this task.`}</span>
-        </>
-      )}
-      {job !== null && (
-        <>
-          <ConfirmDialog
-            trigger={
-              <Button variant="danger" pending={stopping}>
-                Stop
-              </Button>
-            }
-            title={`Stop the run ${job.id}?`}
-            description="The agent stops. The worktree and the files of the job stay."
-            confirmLabel="Stop"
-            onConfirm={onStop}
-          />
-          <span className="small muted">
-            The run <span className="mono">{job.id}</span> operates. It started <span title={time(job.started)}>{ago(job.started)}</span>.
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
-const MAX_QUESTION = 4000;
-
-interface QuestionRowProps {
-  campaign: string;
-  attr: string;
-  /** The task has a job or an entry in the queue: the server rejects a question. */
-  busy: string | null;
   onJobs: (view: JobsView) => void;
 }
 
-/** A question of a person for the agent. The task goes into the queue, and its next run continues the session of `claude` with the question. */
-function QuestionRow({ campaign, attr, busy, onJobs }: QuestionRowProps) {
+/**
+ * The question for the agent and the Run button. Also the Stop button, the job of the task and its position in the
+ * queue. Without a question, the run is a usual run. With a question, the next run continues the session of `claude`
+ * in the worktree with the question. The server rejects a run for a task with a job or with an entry.
+ */
+function RunRow({ campaign, attr, job, place, onJobs }: RunRowProps) {
   const client = useClient();
   const toast = useToast();
   const [question, setQuestion] = useState("");
-  const ask = useAction(async () => {
-    onJobs(await client.ask(campaign, attr, { question: question.trim() }));
+  const start = useAction(async () => {
+    const text = question.trim();
+    onJobs(await client.startRun(campaign, attr, { question: text }));
     setQuestion("");
-    toast(`${attr} is in the queue`, "The next run of the task gets the question.");
+    toast(`${attr} is in the queue`, text === "" ? "The fleet starts the run in a free job place." : "The next run of the task gets the question.");
   });
-  const reason = busy ?? (question.length > MAX_QUESTION ? `The question has more than ${MAX_QUESTION} characters.` : null);
+  const stop = useAction(async () => {
+    const queued = place >= 0;
+    onJobs(await client.stopJob(campaign, attr));
+    toast(queued ? `${attr} is not in the queue now` : `The job of ${attr} stops`);
+  });
+  const reason =
+    job !== null ? "A job of this task operates." : place >= 0 ? "The task is in the queue." : question.length > MAX_QUESTION ? `The question has more than ${MAX_QUESTION} characters.` : null;
   return (
-    <div className="stack" aria-label="Ask the agent">
-      <TextArea label="Question" hideLabel rows={3} maxLength={MAX_QUESTION} value={question} onValueChange={setQuestion} placeholder="A question for the agent" />
+    <div className="stack" aria-label="Next run">
+      <TextArea label="Question" hideLabel rows={3} maxLength={MAX_QUESTION} value={question} onValueChange={setQuestion} placeholder="A question for the agent (optional)" />
       <div className="row">
-        <Button disabled={reason !== null || question.trim() === ""} pending={ask.pending} onClick={() => void ask.run()} title="Add the task to the queue. The next run continues the session of the agent in the worktree, with the question.">
-          Ask
+        <Button variant="primary" disabled={reason !== null} pending={start.pending} onClick={() => void start.run()}>
+          Run
         </Button>
-        <span className="small muted">{reason ?? "The agent replies, and it changes the files only when the question tells it."}</span>
+        {job === null && place >= 0 && (
+          <>
+            <Button variant="danger" pending={stop.pending} onClick={() => void stop.run()}>
+              Remove from queue
+            </Button>
+            <span className="small muted">{place === 0 ? "The task is the first in the queue." : `The queue has ${place} ${place === 1 ? "entry" : "entries"} before this task.`}</span>
+          </>
+        )}
+        {job !== null && (
+          <>
+            <ConfirmDialog
+              trigger={
+                <Button variant="danger" pending={stop.pending}>
+                  Stop
+                </Button>
+              }
+              title={`Stop the run ${job.id}?`}
+              description="The agent stops. The worktree and the files of the job stay."
+              confirmLabel="Stop"
+              onConfirm={() => void stop.run()}
+            />
+            <span className="small muted">
+              The run <span className="mono">{job.id}</span> operates. It started <span title={time(job.started)}>{ago(job.started)}</span>.
+            </span>
+          </>
+        )}
       </div>
-      {ask.error !== null && <Notice tone="error">{ask.error}</Notice>}
+      <span className="small muted">{reason ?? RUN_HINT}</span>
+      {start.error !== null && <Notice tone="error">Run: {start.error}</Notice>}
+      {stop.error !== null && <Notice tone="error">Stop: {stop.error}</Notice>}
     </div>
   );
 }

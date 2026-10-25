@@ -12,7 +12,7 @@ import {
   ImportInputSchema,
   JobInputSchema,
   PublishInputSchema,
-  QuestionInputSchema,
+  RunInputSchema,
   SettingsSchema,
   TaskStateSchema,
   type CampaignSummary,
@@ -33,11 +33,15 @@ interface Schema<T> {
   safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } };
 }
 
-/** The JSON body as `T`. An incorrect body gives an HTTP 400 error with the messages of zod. */
-async function body<T>(c: Context, schema: Schema<T>): Promise<T> {
+/**
+ * The JSON body as `T`. A request without a body gives `empty` to the schema, when the route has an `empty` value. An
+ * incorrect body gives an HTTP 400 error with the messages of zod.
+ */
+async function body<T>(c: Context, schema: Schema<T>, empty?: unknown): Promise<T> {
   let value: unknown;
   try {
-    value = await c.req.json();
+    const raw = await c.req.text();
+    value = raw === "" && empty !== undefined ? empty : JSON.parse(raw);
   } catch {
     fail(400, "the body is not JSON");
   }
@@ -226,12 +230,13 @@ export function app(ctx: fleet.Ctx): Hono {
     return c.json(await fleet.jobsView(ctx, p(c).c));
   });
 
-  api.post("/api/campaigns/:c/tasks/:attr/question", async (c) => {
-    const { question } = await body(c, QuestionInputSchema);
+  // One run of one task, with or without a question. The campaign page adds more tasks with `POST .../jobs`.
+  api.post("/api/campaigns/:c/tasks/:attr/run", async (c) => {
+    const { question } = await body(c, RunInputSchema, {});
     const { c: name, attr } = p(c);
     await fleet.readCampaign(ctx, name);
     await fleet.readTask(ctx, name, attr);
-    await fleet.addQuestion(ctx, name, attr, question);
+    await fleet.queueRun(ctx, name, attr, question);
     await fleet.ensureFleet(ctx, name);
     return c.json(await fleet.jobsView(ctx, name), 202);
   });

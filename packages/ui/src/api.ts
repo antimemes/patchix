@@ -9,7 +9,7 @@ import type {
   JobsView,
   Label,
   PublishInput,
-  QuestionInput,
+  RunInput,
   Settings,
   SettingsView,
   TaskDetail,
@@ -57,8 +57,8 @@ export interface Client {
   /** Removes the task and its question from the queue. When the task is not in the queue, it stops the job of the task. */
   stopJob(c: string, attr: string): Promise<JobsView>;
   clearQueue(c: string): Promise<JobsView>;
-  /** Adds the task to the queue with a question for the next run. See `QuestionInput`. */
-  ask(c: string, attr: string, input: QuestionInput): Promise<JobsView>;
+  /** Adds the task to the queue for one run, with the question of `input` or without a question. See `RunInput`. */
+  startRun(c: string, attr: string, input: RunInput): Promise<JobsView>;
   saveDraft(c: string, attr: string, input: DraftInput): Promise<TaskDetail>;
   /** Makes the draft from the newest run with a description and from the tip of the branch. See `makeDraft` in the fleet package. */
   makeDraft(c: string, attr: string): Promise<TaskDetail>;
@@ -138,7 +138,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     queueRuns: (c, input) => json("POST", `${campaign(c)}/jobs`, input),
     stopJob: (c, attr) => json("DELETE", `${campaign(c)}/jobs/${s(attr)}`),
     clearQueue: (c) => json("DELETE", `${campaign(c)}/queue`),
-    ask: (c, attr, input) => json("POST", `${task(c, attr)}/question`, input),
+    startRun: (c, attr, input) => json("POST", `${task(c, attr)}/run`, input),
     saveDraft: (c, attr, input) => json("PUT", `${task(c, attr)}/draft`, input),
     makeDraft: (c, attr) => json("POST", `${task(c, attr)}/draft`),
     createPr: (c, attr, input) => json("POST", `${task(c, attr)}/pr`, input),

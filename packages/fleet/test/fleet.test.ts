@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
-import { addQuestion, dequeue, enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, questionFile, readFleet, runDir, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
+import { dequeue, enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, questionFile, queueRun, readFleet, runDir, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
 
 let tmp = "";
 let calls = "";
@@ -119,11 +119,11 @@ test("a question is a run entry: the fleet starts the run of the task, and a run
   await dequeue(ctx, "t", "c");
   const seen = (await tabs()).length;
   const tab = (attr: string) => `-s patchix action new-tab --name t/${attr}`;
-  // As the server: `question.md` of the task directory and the usual entry of the task.
-  await addQuestion(ctx, "t", "a", "Why?");
-  await enqueue(ctx, "t", "b");
+  // As the server: a run with a question (`question.md` of the task directory and the entry of the task) and a run without a question.
+  await queueRun(ctx, "t", "a", "Why?");
+  await queueRun(ctx, "t", "b");
   // The first test wrote a `failed` run of `none`, possibly in this second. The task `lost` has no run.
-  await addQuestion(ctx, "t", "lost", "Is the symlink enough?");
+  await queueRun(ctx, "t", "lost", "Is the symlink enough?");
   assert.deepEqual(await listQueue(ctx, "t"), ["a", "b", "lost"]);
 
   await fleetTick(ctx, "t", opts);
@@ -132,7 +132,10 @@ test("a question is a run entry: the fleet starts the run of the task, and a run
   const [asked] = await listRuns(ctx, "t", "a");
   assert.ok(asked !== undefined);
   assert.equal(await readFile(join(runDir(ctx, "t", "a", asked.id), "question.md"), "utf8"), "Why?\n", "the runner took the question");
-  await assert.rejects(addQuestion(ctx, "t", "a", "Again?"), /the task a has a job/);
+  const [plain] = await listRuns(ctx, "t", "b");
+  assert.equal(await exists(join(runDir(ctx, "t", "b", plain?.id ?? ""), "question.md")), false, "a run without a question gets no question.md");
+  await assert.rejects(queueRun(ctx, "t", "a", "Again?"), /the task a has a job/);
+  await assert.rejects(queueRun(ctx, "t", "a"), /the task a has a job/);
 
   await finish("a");
   await fleetTick(ctx, "t", opts);

@@ -123,7 +123,7 @@ export const campaignDir = (ctx: Ctx, c: string) => join(ctx.root, "campaigns", 
 export const stateDir = (ctx: Ctx, c: string) => join(ctx.data, "state", check(c, CAMPAIGN_NAME, "a campaign name"));
 export const taskDir = (ctx: Ctx, c: string, attr: string) => join(stateDir(ctx, c), "tasks", check(attr, ATTR, "an attribute"));
 export const runDir = (ctx: Ctx, c: string, attr: string, id: string) => join(taskDir(ctx, c, attr), "runs", check(id, RUN_ID, "a run id"));
-/** `question.md` of the task directory: the question of a person for the next run of the task. See `addQuestion`. */
+/** `question.md` of the task directory: the question of a person for the next run of the task. See `queueRun`. */
 export const questionFile = (ctx: Ctx, c: string, attr: string) => join(taskDir(ctx, c, attr), "question.md");
 
 /** The file of the output of a check in a run directory. A sign that is not permitted in a file name becomes `_`. */
@@ -320,7 +320,7 @@ export async function enqueue(ctx: Ctx, c: string, attr: string, time = new Date
 }
 
 /**
- * Removes the task from the queue, and also its question: see `addQuestion`. Gives `false` when the queue did not
+ * Removes the task from the queue, and also its question: see `queueRun`. Gives `false` when the queue did not
  * have the task.
  */
 export async function dequeue(ctx: Ctx, c: string, attr: string): Promise<boolean> {
@@ -352,15 +352,18 @@ export async function clearQueue(ctx: Ctx, c: string): Promise<void> {
 }
 
 /**
- * Writes the question of a person into `question.md` of the task directory, then adds the task to the queue. The next
- * run of the task gets the question. A task with a job or with an entry gives an error with status 409. Thus one
- * question waits for each task, and a question does not change the run that operates.
+ * Adds the task to the queue for one run. With a question, it first writes the question into `question.md` of the task
+ * directory: the next run of the task gets it. Without a question (an empty string), it removes a `question.md` without
+ * an entry, if there is one: the run is a usual run. A task with a job or with an entry gives an error with status 409.
+ * Thus one question waits for each task, and a question does not change the run that operates.
  */
-export function addQuestion(ctx: Ctx, c: string, attr: string, question: string): Promise<void> {
-  return serial(`question:${c}`, async () => {
+export function queueRun(ctx: Ctx, c: string, attr: string, question = ""): Promise<void> {
+  return serial(`queue:${c}`, async () => {
     if ((await taskJob(ctx, c, attr)) !== null) fail(409, `the task ${attr} has a job`);
     if ((await listQueue(ctx, c)).includes(attr)) fail(409, `the task ${attr} is in the queue`);
-    await writeAtomic(questionFile(ctx, c, attr), `${question.trim()}\n`);
+    const text = question.trim();
+    if (text === "") await rm(questionFile(ctx, c, attr), { force: true });
+    else await writeAtomic(questionFile(ctx, c, attr), `${text}\n`);
     await enqueue(ctx, c, attr);
   });
 }

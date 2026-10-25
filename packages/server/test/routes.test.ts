@@ -310,34 +310,48 @@ test("stop sends SIGTERM to the runner", async () => {
   assert.match(await readFile(join(runDir(ctx, "t", "qux", "20260101-000003"), "run.yaml"), "utf8"), /status: running/, "the server does not write run.yaml");
 });
 
-test("a question writes question.md of the task and adds the task to the queue, also at the limit of the campaign", async () => {
-  assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: " " }))).status, 400, "no question");
-  assert.equal((await json("/api/campaigns/t/tasks/nope/question", send("POST", { question: "Why?" }))).status, 404);
-  assert.equal((await json("/api/campaigns/t/tasks/foo/ask", send("POST", { question: "Why?" }))).status, 404, "no ask route");
+test("a run without a question adds the entry and writes no question.md, and a run with a question writes question.md, also at the limit of the campaign", async () => {
+  assert.equal((await json("/api/campaigns/t/tasks/nope/run", send("POST", { question: "Why?" }))).status, 404);
+  assert.equal((await json("/api/campaigns/t/tasks/foo/run", { method: "POST", body: "nope" })).status, 400, "a body that is not JSON");
+  assert.equal((await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "x".repeat(4001) }))).status, 400, "a question that is too long");
+  assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Why?" }))).status, 404, "no question route");
   // Two runs operate: the campaign has the `concurrency` of the settings, 2, as its number of jobs.
   const runners = [await marker("run t baz"), await marker("run t qux")];
   const fleet = await marker("fleet t");
   process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
   const before = (await readFile(calls, "utf8")).length;
+  const queue = async (init: RequestInit, path = "/api/campaigns/t/tasks/foo/run") => {
+    const res = await json(path, init);
+    return { status: res.status, queue: JobsViewSchema.parse(res.body).queue };
+  };
   try {
     for (const [i, attr] of ["baz", "qux"].entries()) await writeRun(ctx, "t", run(attr, "20260101-000004", "running", runners[i]?.pid ?? null));
-    const res = await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: " Why? " }));
-    assert.equal(res.status, 202);
-    assert.deepEqual(JobsViewSchema.parse(res.body).queue, ["foo"], "the entry of a question is the entry of a run");
+    // No body, an empty body and a question with only spaces: a run without a question.
+    for (const init of [{ method: "POST" }, send("POST", {}), send("POST", { question: " \n" })] as RequestInit[]) {
+      assert.deepEqual(await queue(init), { status: 202, queue: ["foo"] }, String(init.body ?? "no body"));
+      assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "no question.md");
+      assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, null);
+      assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", { method: "POST" }), { status: 409, body: { error: "the task foo is in the queue" } });
+      assert.deepEqual(await queue({ method: "DELETE" }, "/api/campaigns/t/jobs/foo"), { status: 200, queue: [] });
+    }
+    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/run", { method: "POST" }), { status: 409, body: { error: "the task baz has a job" } });
+
+    assert.deepEqual(await queue(send("POST", { question: " Why? " })), { status: 202, queue: ["foo"] }, "the entry of a question is the entry of a run");
     assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n");
     const tabs = (await readFile(calls, "utf8")).slice(before);
     assert.match(tabs, /^t fleet$/m, "the server starts the fleet");
     assert.doesNotMatch(tabs, /"run"/, "only the fleet starts the run");
     assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, "Why?");
 
-    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Again?" })), { status: 409, body: { error: "the task foo is in the queue" } });
-    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/question", send("POST", { question: "Why?" })), { status: 409, body: { error: "the task baz has a job" } });
-    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "a refused question does not replace the question");
+    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "Again?" })), { status: 409, body: { error: "the task foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", { method: "POST" }), { status: 409, body: { error: "the task foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/run", send("POST", { question: "Why?" })), { status: 409, body: { error: "the task baz has a job" } });
+    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "a refused run does not change the question");
 
-    assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/jobs/foo", { method: "DELETE" })).body).queue, []);
+    assert.deepEqual(await queue({ method: "DELETE" }, "/api/campaigns/t/jobs/foo"), { status: 200, queue: [] });
     assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the question goes away with the entry");
     assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, null);
-    assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Why?" }))).status, 202);
+    assert.equal((await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "Why?" }))).status, 202);
     assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/queue", { method: "DELETE" })).body).queue, []);
     assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the clear of the queue also removes the questions");
   } finally {

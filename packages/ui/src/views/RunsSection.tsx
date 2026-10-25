@@ -49,7 +49,7 @@ export function BranchSection({ campaign, task, clean }: { campaign: Campaign; t
             label: `Checks of the tip ${checked?.checks.length ?? 0}/${campaign.checks.length}`,
             content:
               checked === undefined ? (
-                <p className="muted">No run has the checks of the tip. Queue a run or ask a question: the runner starts the checks of the tip.</p>
+                <p className="muted">No run has the checks of the tip. Start a run with the Run button: the runner starts the checks of the tip.</p>
               ) : (
                 <div className="stack">
                   <p className="small muted">

@@ -11,8 +11,8 @@
 // The variables `CHROMIUM` and `FFMPEG` give different commands.
 //
 // RULE: the server shows live data. The tour must not change the data.
-// Do not click a button that starts an operation: `Queue`, `Queue selected`, `Queue again`, `Clear queue`,
-// `Remove from queue`, `Stop`, `Sync`, `Refresh`, `Fetch base`, `Ask`, `Save draft`, `Make draft`, `Make worktree`,
+// Do not click a button that starts an operation: `Queue`, `Queue selected`, `Run`, `Clear queue`,
+// `Remove from queue`, `Stop`, `Sync`, `Refresh`, `Fetch base`, `Save draft`, `Make draft`, `Make worktree`,
 // `Remove worktree`, `Push and create pull request`, `Push and update pull request`.
 // Do not type in the draft. Do not change the labels.
 // Only open pages, select tabs, open disclosures, type in `Filter attributes`, move the pointer and move up and down.
@@ -46,7 +46,7 @@ const FPS = 30;
 const PREFERRED_TASK = "pgsql-tools";
 
 // The text of each control that the tour must not click.
-const FORBIDDEN = /^(Queue|Queue selected.*|Queue again|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Ask.*|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Push and create pull request|Push and update pull request|Replace|×)$/;
+const FORBIDDEN = /^(Queue|Queue selected.*|Run|Clear queue|Remove from queue|Stop|Sync|Refresh|Fetch base|Save draft|Discard changes|Make draft.*|Make worktree|Remove worktree|Push and create pull request|Push and update pull request|Replace|×)$/;
 
 const work = mkdtempSync(join(tmpdir(), "patchix-tour-"));
 const frames = join(work, "frames");

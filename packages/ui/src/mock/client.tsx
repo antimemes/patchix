@@ -122,8 +122,8 @@ export function mockClient(options: MockOptions): Client {
   /** The commits of the branch of the task: none without a tip or without a run with a base, as the server. */
   const branchOf = (t: TaskView) => (t.head === null || !t.runs.some((r) => r.base !== "") ? [] : f.commits(t.attr, t.head));
 
-  /** As the runner: the run gets the question of the task. */
-  function startRun(s: State, attr: string) {
+  /** As the runner: the run starts, and it gets the question of the task. */
+  function launch(s: State, attr: string) {
     const t = taskOf(s, attr);
     const run = { ...f.runningRun(attr, 0), question: s.questions.get(attr) ?? null };
     s.questions.delete(attr);
@@ -138,7 +138,7 @@ export function mockClient(options: MockOptions): Client {
       if (s.jobs.length >= settings.concurrency) break;
       if (s.jobs.some((j) => j.attr === attr)) continue;
       s.queue = s.queue.filter((x) => x !== attr);
-      startRun(s, attr);
+      launch(s, attr);
       changed(s, attr);
     }
     s.fleet = s.queue.length > 0;
@@ -231,14 +231,16 @@ export function mockClient(options: MockOptions): Client {
         if (s.queue.length > 0) later(s);
         return jobsView(s);
       }),
-    ask: (c, attr, input) =>
-      answer("ask", () => {
+    startRun: (c, attr, input) =>
+      answer("startRun", () => {
         const s = state(c);
         taskOf(s, attr);
-        // As the server: the question waits for the next run of the task, and the task goes into the queue.
+        // As the server: the task goes into the queue, and a question waits for the next run of the task.
         if (s.jobs.some((j) => j.attr === attr)) fail(409, `the task ${attr} has a job`);
         if (s.queue.includes(attr)) fail(409, `the task ${attr} is in the queue`);
-        s.questions.set(attr, input.question.trim());
+        const question = (input.question ?? "").trim();
+        if (question === "") s.questions.delete(attr);
+        else s.questions.set(attr, question);
         s.queue.push(attr);
         s.fleet = true;
         jobsChanged(s);
