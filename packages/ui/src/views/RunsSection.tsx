@@ -11,9 +11,18 @@ import { useLoad } from "../hooks.ts";
 import { AttachNotice, RemoteText, RunBadges, TagBadges } from "./shared.tsx";
 import "./views.css";
 
-export type RunTab = "diff" | "commits" | "checks" | "prompt" | "description";
+export type RunTab = "diff" | "commits" | "checks" | "prompt" | "description" | "reply";
 
-export function RunsSection({ campaign, task }: { campaign: Campaign; task: TaskView }) {
+export interface RunsSectionProps {
+  campaign: Campaign;
+  task: TaskView;
+  /** The task is in the queue: the list starts with the run that waits. */
+  queued: boolean;
+  /** The question for the run that waits. See `TaskDetail.question`. */
+  question: string | null;
+}
+
+export function RunsSection({ campaign, task, queued, question }: RunsSectionProps) {
   const [chosen, setChosen] = useState<string | null>(null);
   const [tab, setTab] = useState<RunTab>("diff");
   const run = task.runs.find((r) => r.id === chosen) ?? task.runs[0];
@@ -23,7 +32,7 @@ export function RunsSection({ campaign, task }: { campaign: Campaign; task: Task
         <h2>Runs</h2>
         <span className="muted small">{task.runs.length}</span>
       </div>
-      {run === undefined ? (
+      {run === undefined && !queued ? (
         <p className="muted">No runs. The Run button starts the agent.</p>
       ) : (
         <>
@@ -39,15 +48,31 @@ export function RunsSection({ campaign, task }: { campaign: Campaign; task: Task
                 </tr>
               </thead>
               <tbody>
-                {task.runs.map((r) => (
-                  <tr key={r.id} className={r.id === run.id ? "is-selected" : undefined}>
+                {queued && (
+                  <tr>
+                    <td className="small muted">next</td>
                     <td>
-                      <Button size="sm" variant="ghost" aria-pressed={r.id === run.id} onClick={() => setChosen(r.id)}>
+                      <StatusBadge status="queued" />
+                    </td>
+                    <td colSpan={3} className="small">
+                      {question === null ? <span className="muted">The run waits in the queue.</span> : <span className="run-question">{question}</span>}
+                    </td>
+                  </tr>
+                )}
+                {task.runs.map((r) => (
+                  <tr key={r.id} className={r.id === run?.id ? "is-selected" : undefined}>
+                    <td>
+                      <Button size="sm" variant="ghost" aria-pressed={r.id === run?.id} onClick={() => setChosen(r.id)}>
                         {r.id}
                       </Button>
                     </td>
-                    <td>
+                    <td className="nowrap">
                       <StatusBadge status={r.status} />
+                      {r.error !== null && (
+                        <span className="small muted run-error" title={r.error}>
+                          {r.error}
+                        </span>
+                      )}
                     </td>
                     <td className="small mono">{r.model}</td>
                     <td className="num">{r.commits}</td>
@@ -59,7 +84,7 @@ export function RunsSection({ campaign, task }: { campaign: Campaign; task: Task
               </tbody>
             </table>
           </div>
-          <RunView campaign={campaign} attr={task.attr} run={run} tab={tab} onTab={setTab} />
+          {run !== undefined && <RunView campaign={campaign} attr={task.attr} run={run} checksRun={task.runs.find((r) => r.id === run.checks_of) ?? run} tab={tab} onTab={setTab} />}
         </>
       )}
     </section>
@@ -70,15 +95,17 @@ interface RunViewProps {
   campaign: Campaign;
   attr: string;
   run: Run;
+  /** The run with the checks that apply: `run`, or the run of `checks_of`. See `RunSchema.checks_of`. */
+  checksRun: Run;
   tab: RunTab;
   onTab: (tab: RunTab) => void;
 }
 
-export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
+export function RunView({ campaign, attr, run, checksRun, tab, onTab }: RunViewProps) {
   const client = useClient();
   const c = campaign.name;
   const running = run.status === "running";
-  const version = `${c}/${attr}/${run.id}/${run.finished ?? "running"}`;
+  const version = (r: Run) => `${c}/${attr}/${r.id}/${r.finished ?? "running"}`;
   return (
     <div className="stack">
       <div className="row">
@@ -92,10 +119,15 @@ export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
           <span className="mono">{short(run.base)}</span> to <span className="mono">{run.head === null ? "no commit" : short(run.head)}</span>
         </span>
       </div>
-      {run.error !== null && <Notice tone="error">{run.error}</Notice>}
+      {run.question !== null && (
+        <p className="run-question" aria-label={`Question of run ${run.id}`}>
+          {run.question}
+        </p>
+      )}
+      {run.error !== null && run.status !== "unverified" && <Notice tone="error">{run.error}</Notice>}
       {run.status === "unverified" && (
         <Notice tone="warning">
-          The agent made a fix, but a check did not agree with its pass expression: the Checks tab gives the output. A person examines it and makes the decision. The Publish tab can make the pull request.
+          {run.error === null ? "The agent made a fix, but a check did not agree with its pass expression: the Checks tab gives the output." : `The work of the agent has a problem: ${run.error}.`} A person examines it and makes the decision. The Publish tab can make the pull request.
         </Notice>
       )}
       {run.status === "wontfix" && (
@@ -110,22 +142,27 @@ export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
           {
             value: "diff",
             label: "Full diff",
-            content: <RemoteText label="Full diff" diff loadKey={`diff:${version}`} load={() => client.runFile(c, attr, run.id, "diff")} empty="No diff." />,
+            content: <RemoteText label="Full diff" diff loadKey={`diff:${version(run)}`} load={() => client.runFile(c, attr, run.id, "diff")} empty="No diff." />,
           },
           {
             value: "commits",
             label: "Commits",
-            content: <CommitsView campaign={c} attr={attr} run={run} version={version} />,
+            content: <CommitsView campaign={c} attr={attr} run={run} version={version(run)} />,
           },
           {
             value: "checks",
-            label: `Checks ${run.checks.length}/${campaign.checks.length}`,
-            content: <ChecksView campaign={campaign} attr={attr} run={run} version={version} />,
+            label: `Checks ${checksRun.checks.length}/${campaign.checks.length}`,
+            content: (
+              <div className="stack">
+                {checksRun !== run && <Notice aria-label="Checks of a previous run">The checks of run {checksRun.id} apply: the branch did not change.</Notice>}
+                <ChecksView campaign={campaign} attr={attr} run={checksRun} version={version(checksRun)} />
+              </div>
+            ),
           },
           {
             value: "prompt",
             label: "Prompt",
-            content: <RemoteText label="Prompt" wrap loadKey={`prompt:${version}`} load={() => client.runFile(c, attr, run.id, "prompt")} empty="No prompt." />,
+            content: <RemoteText label="Prompt" wrap loadKey={`prompt:${version(run)}`} load={() => client.runFile(c, attr, run.id, "prompt")} empty="No prompt." />,
           },
           {
             value: "description",
@@ -135,7 +172,12 @@ export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
                 {run.lint !== null && run.lint > 0 && <Badge tone="amber">{run.lint}</Badge>}
               </>
             ),
-            content: <RemoteText label="Description" wrap loadKey={`description:${version}`} load={() => client.runFile(c, attr, run.id, "description")} empty="No description." />,
+            content: <RemoteText label="Description" wrap loadKey={`description:${version(run)}`} load={() => client.runFile(c, attr, run.id, "description")} empty="No description." />,
+          },
+          {
+            value: "reply",
+            label: "Reply",
+            content: <RemoteText label="Reply" wrap loadKey={`reply:${version(run)}`} load={() => client.runFile(c, attr, run.id, "reply")} empty="No reply." />,
           },
         ]}
       />

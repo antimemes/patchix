@@ -56,7 +56,6 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
                 <Link href={href.task(campaign, job.attr)} className="mono break">
                   {job.attr}
                 </Link>
-                <Badge tone={job.kind === "run" ? "blue" : "purple"}>{job.kind}</Badge>
                 <span className="spacer" />
                 <ConfirmDialog
                   trigger={
@@ -64,17 +63,16 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
                       Stop
                     </Button>
                   }
-                  title={`Stop the ${job.kind} of ${job.attr}?`}
+                  title={`Stop the run of ${job.attr}?`}
                   description="The agent stops. The worktree and the files of the job stay."
                   confirmLabel="Stop"
                   onConfirm={() => void stop.run(job.attr)}
                 />
               </div>
               <p className="small muted">
-                <span className="mono">{job.id}</span> · <span title={time(job.started)}>{ago(job.started, now)}</span> ·{" "}
-                {job.kind === "run" ? "the agent or the checks operate" : "the agent writes the reply"}
+                <span className="mono">{job.id}</span> · <span title={time(job.started)}>{ago(job.started, now)}</span> · the agent or the checks operate
               </p>
-              <Progress value={null} label={`${job.kind} of ${job.attr}`} hideLabel />
+              <Progress value={null} label={`run of ${job.attr}`} hideLabel />
             </li>
           ))}
         </ul>

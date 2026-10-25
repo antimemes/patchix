@@ -46,7 +46,7 @@ export const Running: Story = {
           tasks: ISSUE_TASKS.map((a) =>
             a === "anki" || a === "calibre" ? task(a, { state: "running", runs: [runningRun(a, a === "anki" ? 4 : 11)], worktree: worktreePath(a) }) : task(a),
           ),
-          jobs: [job("anki", "run", 4), job("calibre", "run", 11)],
+          jobs: [job("anki", 4), job("calibre", 11)],
         },
       ],
     })),
@@ -55,7 +55,7 @@ export const Running: Story = {
 
 export const Mixed: Story = {
   parameters: { docs: { description: { story: "3. Tasks in each state, with source flags, worktrees, check badges, lint counts and the start time of the newest run: some minutes, hours or days ago." } } },
-  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", "run", 6), job("gajim", "run", 2)] }] }))],
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", 6), job("gajim", 2)] }] }))],
 };
 
 export const Queued: Story = {
@@ -71,7 +71,7 @@ export const Queued: Story = {
           tasks: ISSUE_TASKS.map((a) =>
             a === "anki" || a === "calibre" ? task(a, { state: "running", runs: [runningRun(a, a === "anki" ? 4 : 11)], worktree: worktreePath(a) }) : task(a),
           ),
-          jobs: [job("anki", "run", 4), job("calibre", "run", 11)],
+          jobs: [job("anki", 4), job("calibre", 11)],
           queue: ["zotero", "gajim", "electrum"],
         },
       ],
@@ -93,7 +93,7 @@ export const Busy: Story = {
           campaign: CAMPAIGN,
           synced: at(42),
           tasks: mixedTasks().filter((t) => t.state === "todo" || t.state === "running"),
-          jobs: [job("arduino-core", "run", 6), job("gajim", "run", 2)],
+          jobs: [job("arduino-core", 6), job("gajim", 2)],
         },
       ],
     })),

@@ -4,7 +4,6 @@ export * from "./github.ts";
 export * from "./lint.ts";
 export * from "./checks.ts";
 export * from "./run.ts";
-export * from "./ask.ts";
 export * from "./pr.ts";
 export * from "./sync.ts";
 export * from "./zellij.ts";

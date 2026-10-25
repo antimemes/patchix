@@ -17,8 +17,9 @@ type Story = StoryObj<typeof meta>;
 
 export const Empty: Story = {};
 
+/** Two runs operate, and three tasks wait. The fleet starts their runs in this sequence. */
 export const RunsAndQueue: Story = {
-  args: { view: { jobs: [job("anki", "run", 4), job("calibre", "ask", 1)], queue: ["electrum", "gajim", "zotero"], fleet: true } },
+  args: { view: { jobs: [job("anki", 4), job("calibre", 1)], queue: ["electrum", "gajim", "zotero"], fleet: true } },
 };
 
 export const QueueWithoutFleet: Story = {

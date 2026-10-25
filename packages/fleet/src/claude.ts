@@ -1,4 +1,4 @@
-/** One `claude -p` operation in the worktree of a task. Its output goes into the log of the run or of the ask. */
+/** One `claude -p` operation in the worktree of a task. Its output goes into the log of the run. */
 import type { Writable } from "node:stream";
 import { start, type StartResult } from "./proc.ts";
 
@@ -20,7 +20,7 @@ export interface ClaudeOptions {
   cwd: string;
   prompt: string;
   model: string;
-  /** The run or ask directory. */
+  /** The run directory. */
   dir: string;
   out: Writable;
   stdout?: Writable;
@@ -29,7 +29,7 @@ export interface ClaudeOptions {
   cont?: boolean;
 }
 
-/** Starts `claude -p` and waits until it stops. The child gets the run or ask directory in `PATCHIX_RUN_DIR`. */
+/** Starts `claude -p` and waits until it stops. The child gets the run directory in `PATCHIX_RUN_DIR`. */
 export function runClaude(opts: ClaudeOptions): Promise<StartResult> {
   const bytes = Buffer.byteLength(opts.prompt);
   if (bytes > MAX_PROMPT_BYTES) return Promise.reject(new Error(`the prompt has ${bytes} bytes, more than ${MAX_PROMPT_BYTES}`));

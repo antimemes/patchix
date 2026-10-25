@@ -37,8 +37,9 @@ export function StateChip({ state, count, ...props }: BadgeProps & { state: Task
   );
 }
 
-/** A check that is `fail` makes the run `unverified`, and a check that is `error` makes it `failed`: the colors agree. */
-const STATUS_TONE: Record<Run["status"] | CheckResult["status"], Tone> = {
+/** A check that is `fail` makes the run `unverified`, and a check that is `error` makes it `failed`: the colors agree. A `queued` run waits in the queue. */
+const STATUS_TONE: Record<Run["status"] | "queued" | CheckResult["status"], Tone> = {
+  queued: "muted",
   running: "blue",
   ok: "green",
   unverified: "amber",
@@ -50,7 +51,7 @@ const STATUS_TONE: Record<Run["status"] | CheckResult["status"], Tone> = {
   error: "red",
 };
 
-export function StatusBadge({ status, children, ...props }: BadgeProps & { status: Run["status"] | CheckResult["status"] }) {
+export function StatusBadge({ status, children, ...props }: BadgeProps & { status: keyof typeof STATUS_TONE }) {
   return (
     <Badge tone={STATUS_TONE[status]} {...props}>
       {children ?? status}

@@ -1,19 +1,19 @@
 /**
- * The routes of `packages/common/src/api.ts`. The server starts the fleets and the asks in zellij: the server does
- * not operate them. The server does not write `run.yaml`, `ask.yaml` or `fleet.yaml`.
+ * The routes of `packages/common/src/api.ts`. The server starts only the fleets in zellij, and the fleets start the
+ * runs. The server does not write `run.yaml` or `fleet.yaml`.
  */
 import { join } from "node:path";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
-  AskInputSchema,
   CONFIRM_ERROR,
   DraftFromRunSchema,
   DraftInputSchema,
   ImportInputSchema,
   JobInputSchema,
   PublishInputSchema,
+  QuestionInputSchema,
   SettingsSchema,
   TaskStateSchema,
   type CampaignSummary,
@@ -98,7 +98,7 @@ async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDeta
   return {
     campaign,
     task,
-    asks: await fleet.listAsks(ctx, c, attr),
+    question: (await fleet.readText(fleet.questionFile(ctx, c, attr)))?.trim() ?? null,
     draft: await fleet.readDraft(ctx, c, attr),
     rendered: rendered?.text ?? null,
     mark_problems: rendered?.problems ?? [],
@@ -124,14 +124,6 @@ async function text(c: Context, path: string): Promise<Response> {
   return c.text(content);
 }
 
-/** Gives a 409 error when the task has a job, or when the number of jobs of the campaign is the `concurrency` of the settings. */
-async function room(ctx: fleet.Ctx, campaign: string, attr: string): Promise<void> {
-  const job = await fleet.taskJob(ctx, campaign, attr);
-  if (job !== null) fail(409, `the task ${attr} has a ${job.kind} that operates: ${job.id}`);
-  const { concurrency } = await fleet.readSettings(ctx);
-  if ((await fleet.jobs(ctx, campaign)).length >= concurrency) fail(409, `the campaign has ${concurrency} jobs that operate, its limit`);
-}
-
 /**
  * The settings, the fork that patchix uses and the state of `GH_TOKEN`. When the settings have no fork and `gh` gives
  * an error, `fork_effective` is `null` and the server log gets the error.
@@ -153,7 +145,6 @@ export function app(ctx: fleet.Ctx): Hono {
   api.use(log);
   const p = (c: Context) => ({ c: c.req.param("c") ?? "", attr: c.req.param("attr") ?? "", id: c.req.param("id") ?? "" });
   const run = (c: Context, file: string) => join(fleet.runDir(ctx, p(c).c, p(c).attr, p(c).id), file);
-  const ask = (c: Context, file: string) => join(fleet.askDir(ctx, p(c).c, p(c).attr, p(c).id), file);
   /** The labels of each repository and the time that `gh` gave them. */
   const labels = new Map<string, { at: number; list: Label[] }>();
 
@@ -195,6 +186,7 @@ export function app(ctx: fleet.Ctx): Hono {
   api.get("/api/campaigns/:c/tasks/:attr", async (c) => c.json(await detail(ctx, p(c).c, p(c).attr)));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/log", (c) => text(c, run(c, "log.txt")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/prompt", (c) => text(c, run(c, "prompt.md")));
+  api.get("/api/campaigns/:c/tasks/:attr/runs/:id/reply", (c) => text(c, run(c, "reply.md")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/diff", (c) => text(c, run(c, "diff.patch")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/description", (c) => text(c, run(c, "description.md")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/commits", async (c) => c.json(await fleet.runCommits(ctx, p(c).c, p(c).attr, p(c).id)));
@@ -228,8 +220,7 @@ export function app(ctx: fleet.Ctx): Hono {
     if (!(await fleet.dequeue(ctx, name, attr))) {
       const job = await fleet.taskJob(ctx, name, attr);
       if (job === null) fail(404, `the task ${attr} has no entry in the queue and no job`);
-      if (job.pid === null) fail(409, `the ${job.kind} ${job.id} did not start; stop it again after some seconds`);
-      process.kill(job.pid, "SIGTERM");
+      if (job.pid !== null) process.kill(job.pid, "SIGTERM");
     }
     return c.json(await fleet.jobsView(ctx, name));
   });
@@ -239,25 +230,15 @@ export function app(ctx: fleet.Ctx): Hono {
     return c.json(await fleet.jobsView(ctx, p(c).c));
   });
 
-  api.post("/api/campaigns/:c/tasks/:attr/ask", async (c) => {
-    const { question } = await body(c, AskInputSchema);
+  api.post("/api/campaigns/:c/tasks/:attr/question", async (c) => {
+    const { question } = await body(c, QuestionInputSchema);
     const { c: name, attr } = p(c);
     await fleet.readCampaign(ctx, name);
     await fleet.readTask(ctx, name, attr);
-    await room(ctx, name, attr);
-    const id = await fleet.newId(join(fleet.taskDir(ctx, name, attr), "asks"));
-    // The ask command writes `ask.yaml`. Until then, the ask directory with `question.md` is an ask that starts.
-    // When the tab does not start, the ask is `failed` after 2 minutes: see `AskSchema`.
-    await fleet.writeAtomic(join(fleet.askDir(ctx, name, attr, id), "question.md"), `${question}\n`);
-    if (!(await fleet.launch(ctx, `${name}/${attr}/ask`, ["ask", name, attr, id])).tab) {
-      console.warn(`warning: the tab ${name}/${attr}/ask is not in the zellij session; the ask ${id} can operate without a tab`);
-    }
-    return c.json(await fleet.readAsk(ctx, name, attr, id), 201);
+    await fleet.addQuestion(ctx, name, attr, question);
+    await fleet.ensureFleet(ctx, name);
+    return c.json(await fleet.jobsView(ctx, name), 202);
   });
-  api.get("/api/campaigns/:c/tasks/:attr/asks/:id/reply", (c) => text(c, ask(c, "reply.md")));
-  api.get("/api/campaigns/:c/tasks/:attr/asks/:id/log", (c) => text(c, ask(c, "log.txt")));
-  api.get("/api/campaigns/:c/tasks/:attr/asks/:id/prompt", (c) => text(c, ask(c, "prompt.md")));
-  api.get("/api/campaigns/:c/tasks/:attr/asks/:id/diff", (c) => text(c, ask(c, "diff.patch")));
 
   api.put("/api/campaigns/:c/tasks/:attr/draft", async (c) => {
     await fleet.putDraft(ctx, p(c).c, p(c).attr, await body(c, DraftInputSchema));

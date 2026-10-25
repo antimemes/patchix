@@ -6,7 +6,6 @@
  * - `refresh <campaign>` reads only the state of the pull requests of the fork. See `refreshPrs`.
  * - `run <campaign> <attr>` does one run of the task and writes its status. The command line must contain
  *   `run <campaign> <attr>`: the server and the fleet look for these words. See `alive`.
- * - `ask <campaign> <attr> <id>` gives the question of the ask to the agent. The server writes `question.md` first.
  * - `fleet <campaign>` starts the runs of the queue of the campaign, and stops when the queue is empty. See `runFleet`.
  * - `worktree <campaign> <attr>` makes the worktree of the task and writes its path.
  * - `base <campaign>` gets the newest commit of the `base_branch` with depth 1.
@@ -20,14 +19,13 @@
  * the server with it. The CLI reads `<data>/.env`. The `fork`, the `model` and the `concurrency` come from
  * `<data>/settings.yaml`: see `readSettings` and `forkOf`. The CLI does not write that file.
  *
- * For `run` and `ask`, `SIGTERM` and `SIGINT` stop the agent and the checks, and the run or the ask gets the status
- * `stopped`. These signals stop the other commands without more steps.
+ * For `run`, `SIGTERM` and `SIGINT` stop the agent and the checks, and the run gets the status `stopped`. These
+ * signals stop the other commands without more steps.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { publishable } from "@patchix/common";
-import { runAsk } from "./ask.ts";
 import { addWorktree, adopt, updateBase } from "./git.ts";
 import { importBranches } from "./import.ts";
 import { runFleet } from "./fleet.ts";
@@ -36,7 +34,7 @@ import { startRun } from "./run.ts";
 import { context, listRuns, message, readCampaign } from "./store.ts";
 import { sync } from "./sync.ts";
 
-const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt <campaign> <attr> | ask <campaign> <attr> <id> | draft <campaign> <attr> [run] | import <campaign> <git-url> [--descriptions <dir>]";
+const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt <campaign> <attr> | draft <campaign> <attr> [run] | import <campaign> <git-url> [--descriptions <dir>]";
 const options = { descriptions: { type: "string" }, root: { type: "string" }, data: { type: "string" }, path: { type: "string" } } as const;
 const { positionals, values } = parseArgs({ allowPositionals: true, options });
 if (values.path) process.env["PATH"] = values.path;
@@ -46,7 +44,7 @@ const env = join(ctx.data, ".env");
 if (existsSync(env)) process.loadEnvFile(env);
 // The agent and the checks are in different process groups: thus this process stops them after a signal.
 const abort = new AbortController();
-if (command === "run" || command === "ask") for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => abort.abort());
+if (command === "run") for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => abort.abort());
 
 async function main(): Promise<number> {
   if (campaign === undefined) throw new Error(USAGE);
@@ -69,11 +67,6 @@ async function main(): Promise<number> {
   }
   if (command === "fleet" && rest.length === 0) {
     return runFleet(ctx, campaign);
-  }
-  if (command === "ask" && attr !== undefined && id !== undefined && rest.length === 2) {
-    const ask = await runAsk(ctx, campaign, attr, id, abort.signal);
-    console.log(`${attr}: ask ${ask.id} ${ask.status}${ask.error === null ? "" : `: ${ask.error}`}`);
-    return ask.status === "ok" ? 0 : 1;
   }
   if (command === "base" && rest.length === 0) {
     console.log(await updateBase(ctx, await readCampaign(ctx, campaign)));

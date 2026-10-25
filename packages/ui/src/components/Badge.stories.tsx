@@ -49,6 +49,7 @@ export const StatusBadges: Story = {
   name: "Run and check status",
   render: () => (
     <div className="row">
+      <StatusBadge status="queued" />
       <StatusBadge status="running" />
       <StatusBadge status="ok" />
       <StatusBadge status="unverified" />

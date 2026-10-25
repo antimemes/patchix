@@ -1,5 +1,5 @@
 /**
- * The server does not start the runs, the asks and the fleets as its processes: they operate in the zellij session
+ * The server does not start the runs and the fleets as its processes: they operate in the zellij session
  * `patchix`. Thus they continue when the server stops. A person can look at them with `zellij attach patchix`.
  */
 import { capture } from "./proc.ts";

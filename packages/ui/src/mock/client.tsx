@@ -1,7 +1,7 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
 import { publishable } from "@patchix/common/status";
-import type { Ask, Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
+import type { Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
 import * as f from "./fixtures.ts";
@@ -15,7 +15,8 @@ export interface MockCampaign {
   queue?: string[];
   /** A fleet operates. The default: the queue has entries. */
   fleet?: boolean;
-  asks?: Record<string, Ask[]>;
+  /** The question of each task for its next run. See `TaskDetail.question`. */
+  questions?: Record<string, string>;
   drafts?: Record<string, string>;
   /** `publish.log` of each task. */
   publishLogs?: Record<string, string>;
@@ -38,7 +39,7 @@ export interface MockOptions {
   fail?: Partial<Record<keyof Client, readonly [number, string, Record<string, unknown>?]>>;
   delay?: number;
   hang?: boolean;
-  /** The time before the mock fleet starts the runs of the queue. The default is 1.5 seconds. */
+  /** The time before the mock fleet starts the jobs of the queue. The default is 1.5 seconds. */
   fleetDelay?: number;
 }
 
@@ -53,7 +54,7 @@ interface State {
   jobs: JobStatus[];
   queue: string[];
   fleet: boolean;
-  asks: Map<string, Ask[]>;
+  questions: Map<string, string>;
   drafts: Map<string, string>;
   publishLogs: Map<string, string>;
   commitProblems: Map<string, CommitProblems[]>;
@@ -73,7 +74,7 @@ export function mockClient(options: MockOptions): Client {
       jobs: [...(m.jobs ?? [])],
       queue: [...(m.queue ?? [])],
       fleet: m.fleet ?? (m.queue ?? []).length > 0,
-      asks: new Map(Object.entries(m.asks ?? {})),
+      questions: new Map(Object.entries(m.questions ?? {})),
       drafts,
       publishLogs: new Map(Object.entries(m.publishLogs ?? {})),
       commitProblems: new Map(Object.entries(m.commitProblems ?? {})),
@@ -111,16 +112,18 @@ export function mockClient(options: MockOptions): Client {
     const rendered = draft === null || t.pr_meta === null ? null : f.fakeRender(draft, attr, t.pr_meta.number);
     const lint = draft === null ? null : f.fakeLint(draft);
     const marks = draft === null ? [] : f.fakeMarkProblems(draft, s.campaign);
-    return { campaign: s.campaign, task: t, asks: s.asks.get(attr) ?? [], draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
+    return { campaign: s.campaign, task: t, question: s.questions.get(attr) ?? null, draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
   }
   const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, tasks: s.tasks });
 
+  /** As the runner: the run gets the question of the task. */
   function startRun(s: State, attr: string) {
     const t = taskOf(s, attr);
-    const run = f.runningRun(attr, 0);
+    const run = { ...f.runningRun(attr, 0), question: s.questions.get(attr) ?? null };
+    s.questions.delete(attr);
     t.runs.unshift(run);
     t.state = "running";
-    s.jobs.push({ attr, kind: "run", id: run.id, started: run.started });
+    s.jobs.push({ attr, id: run.id, started: run.started });
   }
 
   /** As the fleet: it starts the runs of the queue while the number of jobs is less than the `concurrency` of the settings. */
@@ -128,7 +131,7 @@ export function mockClient(options: MockOptions): Client {
     for (const attr of [...s.queue]) {
       if (s.jobs.length >= settings.concurrency) break;
       if (s.jobs.some((j) => j.attr === attr)) continue;
-      s.queue = s.queue.filter((a) => a !== attr);
+      s.queue = s.queue.filter((x) => x !== attr);
       startRun(s, attr);
       changed(s, attr);
     }
@@ -136,6 +139,12 @@ export function mockClient(options: MockOptions): Client {
     jobsChanged(s);
   }
   const later = (s: State) => setTimeout(() => fleetTick(s), options.fleetDelay ?? 1500);
+  /** As `dequeue` of the server: it removes the entry and the question of the task. */
+  const remove = (s: State, attr: string) => {
+    s.queue = s.queue.filter((x) => x !== attr);
+    s.questions.delete(attr);
+    changed(s, attr);
+  };
 
   return {
     campaigns: () =>
@@ -158,8 +167,10 @@ export function mockClient(options: MockOptions): Client {
         const t = taskOf(state(c), attr);
         const run = t.runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
         if (file === "prompt") return f.runPrompt(attr);
+        if (file === "reply") return run.status === "running" ? fail(404, "the run has no such file") : run.question === null ? f.RUN_REPLY : f.REPLY;
         if (run.status === "wontfix") return file === "description" ? f.NO_FIX_DESCRIPTION : fail(404, "the run has no such file");
-        if (run.status === "running" || run.head === null) fail(404, "the run has no such file");
+        // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
+        if (run.status === "running" || run.head === null || (file === "description" && run.question !== null)) fail(404, "the run has no such file");
         return file === "diff" ? f.diff(attr) : f.description(attr);
       }),
     commits: (c, attr, id) =>
@@ -192,7 +203,7 @@ export function mockClient(options: MockOptions): Client {
     clearQueue: (c) =>
       answer("clearQueue", () => {
         const s = state(c);
-        s.queue = [];
+        for (const attr of s.queue) remove(s, attr);
         jobsChanged(s);
         later(s);
         return jobsView(s);
@@ -201,7 +212,7 @@ export function mockClient(options: MockOptions): Client {
       answer("stopJob", () => {
         const s = state(c);
         if (s.queue.includes(attr)) {
-          s.queue = s.queue.filter((a) => a !== attr);
+          remove(s, attr);
           jobsChanged(s);
           return jobsView(s);
         }
@@ -223,30 +234,17 @@ export function mockClient(options: MockOptions): Client {
     ask: (c, attr, input) =>
       answer("ask", () => {
         const s = state(c);
-        const t = taskOf(s, attr);
-        const created = f.ask(attr, 0, { question: input.question, status: "running", finished: null, pid: 51234 });
-        s.asks.set(attr, [created, ...(s.asks.get(attr) ?? [])]);
-        s.jobs.push({ attr, kind: "ask", id: created.id, started: created.started });
-        t.worktree ??= f.worktreePath(attr);
+        taskOf(s, attr);
+        // As the server: the question waits for the next run of the task, and the task goes into the queue.
+        if (s.jobs.some((j) => j.attr === attr)) fail(409, `the task ${attr} has a job`);
+        if (s.queue.includes(attr)) fail(409, `the task ${attr} is in the queue`);
+        s.questions.set(attr, input.question.trim());
+        s.queue.push(attr);
+        s.fleet = true;
         jobsChanged(s);
         changed(s, attr);
-        setTimeout(() => {
-          created.status = "ok";
-          created.finished = new Date().toISOString();
-          created.pid = null;
-          created.files = ["pkgs/development/python-modules/wassima/default.nix"];
-          s.jobs = s.jobs.filter((j) => j.id !== created.id);
-          jobsChanged(s);
-          changed(s, attr);
-          if (s.queue.length > 0) later(s);
-        }, 4000);
-        return created;
-      }),
-    askFile: (c, attr, id, file) =>
-      answer("askFile", () => {
-        const a = state(c).asks.get(attr)?.find((x) => x.id === id) ?? fail(404, `no ask ${id}`);
-        if (file === "prompt") return f.askPrompt(attr, a.question);
-        return file === "reply" ? f.REPLY : f.ASK_DIFF;
+        later(s);
+        return jobsView(s);
       }),
     saveDraft: (c, attr, input) =>
       answer("saveDraft", () => {
@@ -288,7 +286,7 @@ export function mockClient(options: MockOptions): Client {
       const marks = f.fakeMarkProblems(s.drafts.get(attr) ?? "", s.campaign);
       if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
       const job = s.jobs.find((j) => j.attr === attr);
-      if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
+      if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the run ${job.id}`);
       const run = t.runs[0];
       if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
       const problems = s.commitProblems.get(attr) ?? [];
@@ -317,7 +315,7 @@ export function mockClient(options: MockOptions): Client {
       answer("makeWorktree", () => {
         const s = state(c);
         const t = taskOf(s, attr);
-        if (s.jobs.some((j) => j.attr === attr && j.kind === "run")) fail(409, `a run of ${attr} is in progress; its worktree goes away at its end`);
+        if (s.jobs.some((j) => j.attr === attr)) fail(409, `a run of ${attr} is in progress; its worktree goes away at its end`);
         t.worktree = f.worktreePath(attr);
         t.head ??= f.HEAD;
         changed(s, attr);

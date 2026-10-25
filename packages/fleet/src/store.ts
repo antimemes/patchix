@@ -6,7 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
 import {
   ATTR,
-  AskSchema,
   CAMPAIGN_NAME,
   CampaignSchema,
   FleetSchema,
@@ -15,7 +14,6 @@ import {
   RunSchema,
   SettingsSchema,
   TasksFileSchema,
-  type Ask,
   type Campaign,
   type Fleet,
   type JobStatus,
@@ -63,18 +61,13 @@ export function now(): string {
   return new Date().toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-/** The id of a run or an ask that starts at this time: `YYYYMMDD-HHMMSS` in UTC. */
+/** The id of a run that starts at this time: `YYYYMMDD-HHMMSS` in UTC. */
 export function runId(date = new Date()): string {
   return date.toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
 }
 
-/** The time of a run id or an ask id, as `YYYY-MM-DDTHH:MM:SSZ`. */
-export function idTime(id: string): string {
-  return `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}T${id.slice(9, 11)}:${id.slice(11, 13)}:${id.slice(13, 15)}Z`;
-}
-
 /**
- * Makes the directory of a new run or ask in `parent` and gives its id, the time `start`. When a directory has the
+ * Makes the directory of a new run in `parent` and gives its id, the time `start`. When a directory has the
  * id of this second, the id of the next second is used.
  */
 export async function newId(parent: string, start = new Date()): Promise<string> {
@@ -91,9 +84,8 @@ export async function newId(parent: string, start = new Date()): Promise<string>
   fail(409, `${parent} has a directory for each of the next 10 seconds`);
 }
 
-/** The words of the command line of the runner of a run, of an ask and of the fleet. See `alive`. */
+/** The words of the command line of the runner of a run and of the fleet. See `alive`. */
 export const runMarker = (c: string, attr: string) => `run ${c} ${attr}`;
-export const askMarker = (c: string, attr: string) => `ask ${c} ${attr}`;
 export const fleetMarker = (c: string) => `fleet ${c}`;
 
 /** The command line of a process, with one space between the arguments. `null` when the process is not there. */
@@ -129,7 +121,8 @@ export const campaignDir = (ctx: Ctx, c: string) => join(ctx.root, "campaigns", 
 export const stateDir = (ctx: Ctx, c: string) => join(ctx.data, "state", check(c, CAMPAIGN_NAME, "a campaign name"));
 export const taskDir = (ctx: Ctx, c: string, attr: string) => join(stateDir(ctx, c), "tasks", check(attr, ATTR, "an attribute"));
 export const runDir = (ctx: Ctx, c: string, attr: string, id: string) => join(taskDir(ctx, c, attr), "runs", check(id, RUN_ID, "a run id"));
-export const askDir = (ctx: Ctx, c: string, attr: string, id: string) => join(taskDir(ctx, c, attr), "asks", check(id, RUN_ID, "an ask id"));
+/** `question.md` of the task directory: the question of a person for the next run of the task. See `addQuestion`. */
+export const questionFile = (ctx: Ctx, c: string, attr: string) => join(taskDir(ctx, c, attr), "question.md");
 
 /** The file of the output of a check in a run directory. A sign that is not permitted in a file name becomes `_`. */
 export function checkFile(dir: string, name: string): string {
@@ -249,27 +242,20 @@ export async function readTask(ctx: Ctx, c: string, attr: string): Promise<Task>
   return task ?? fail(404, `no task ${attr} in the campaign ${c}`);
 }
 
-/** An ask without `ask.yaml` after this time did not start. */
-const START_MS = 2 * 60_000;
-
 /**
  * A `running` record without a live runner did not finish: this function gives it as `stopped`. It does not write
  * the file: only the runner writes its record.
  */
-function liveRecord<T extends Run | Ask>(record: T, marker: string): T {
-  if (record.status !== "running" || (record.pid !== null && alive(record.pid, marker))) return record;
-  return { ...record, status: "stopped", error: "the process stopped" };
-}
-
-/** The ids of the run directories or the ask directories of a task, the newest first. */
-async function ids(dir: string): Promise<string[]> {
-  return (await readdir(dir).catch(() => [])).filter((id) => RUN_ID.test(id)).sort().reverse();
+function liveRecord(run: Run, marker: string): Run {
+  if (run.status !== "running" || (run.pid !== null && alive(run.pid, marker))) return run;
+  return { ...run, status: "stopped", error: "the process stopped" };
 }
 
 /** The runs of a task, the newest first. */
 export async function listRuns(ctx: Ctx, c: string, attr: string): Promise<Run[]> {
   const out: Run[] = [];
-  for (const id of await ids(join(taskDir(ctx, c, attr), "runs"))) {
+  const ids = (await readdir(join(taskDir(ctx, c, attr), "runs")).catch(() => [])).filter((id) => RUN_ID.test(id));
+  for (const id of ids.sort().reverse()) {
     const run = await readYaml(join(runDir(ctx, c, attr, id), "run.yaml"), RunSchema);
     if (run !== null) out.push(liveRecord(run, runMarker(c, attr)));
   }
@@ -280,52 +266,14 @@ export async function readRun(ctx: Ctx, c: string, attr: string, id: string): Pr
   return (await readYaml(join(runDir(ctx, c, attr, id), "run.yaml"), RunSchema)) ?? fail(404, `no run ${id} of ${attr}`);
 }
 
-/**
- * The ask `id`: `ask.yaml`, or the record of an ask that starts when the directory has only `question.md`. See
- * `AskSchema`. `null` when the directory has no `ask.yaml` and no `question.md`.
- */
-async function loadAsk(ctx: Ctx, c: string, attr: string, id: string): Promise<Ask | null> {
-  const dir = askDir(ctx, c, attr, id);
-  const record = await readYaml(join(dir, "ask.yaml"), AskSchema);
-  if (record !== null) return liveRecord(record, askMarker(c, attr));
-  const question = await readText(join(dir, "question.md"));
-  if (question === null) return null;
-  const started = idTime(id);
-  const late = Date.now() - Date.parse(started) > START_MS;
-  const model = (await readSettings(ctx).catch(() => null))?.model ?? "";
-  const status = late ? "failed" : "running";
-  return { id, attr, question: question.trim(), started, finished: null, status, model, pid: null, files: [], error: late ? "the ask did not start" : null };
-}
-
-/** The asks of a task, the newest first. */
-export async function listAsks(ctx: Ctx, c: string, attr: string): Promise<Ask[]> {
-  const out: Ask[] = [];
-  for (const id of await ids(join(taskDir(ctx, c, attr), "asks"))) {
-    const ask = await loadAsk(ctx, c, attr, id);
-    if (ask !== null) out.push(ask);
-  }
-  return out;
-}
-
 export async function writeRun(ctx: Ctx, c: string, run: Run): Promise<void> {
   await writeYaml(join(runDir(ctx, c, run.attr, run.id), "run.yaml"), RunSchema.parse(run));
 }
 
-/** The ask `id`, also an ask that starts. See `loadAsk`. */
-export async function readAsk(ctx: Ctx, c: string, attr: string, id: string): Promise<Ask> {
-  return (await loadAsk(ctx, c, attr, id)) ?? fail(404, `no ask ${id} of ${attr}`);
-}
-
-export async function writeAsk(ctx: Ctx, c: string, ask: Ask): Promise<void> {
-  await writeYaml(join(askDir(ctx, c, ask.attr, ask.id), "ask.yaml"), AskSchema.parse(ask));
-}
-
-/** The job of a task: its run or ask that is `running`, or `null`. An ask that starts is a job with no `pid`. */
+/** The job of a task: its run that is `running`, or `null`. */
 export async function taskJob(ctx: Ctx, c: string, attr: string): Promise<(JobStatus & { pid: number | null }) | null> {
   const run = (await listRuns(ctx, c, attr)).find((r) => r.status === "running");
-  if (run !== undefined) return { attr, kind: "run", id: run.id, started: run.started, pid: run.pid };
-  const ask = (await listAsks(ctx, c, attr)).find((a) => a.status === "running");
-  return ask === undefined ? null : { attr, kind: "ask", id: ask.id, started: ask.started, pid: ask.pid };
+  return run === undefined ? null : { attr, id: run.id, started: run.started, pid: run.pid };
 }
 
 /** The attributes of the task directories of the campaign, also of a task that the task list does not have. */
@@ -333,12 +281,12 @@ export async function taskDirs(ctx: Ctx, c: string): Promise<string[]> {
   return (await readdir(join(stateDir(ctx, c), "tasks")).catch(() => [])).filter((a) => ATTR.test(a)).sort();
 }
 
-/** The runs and asks of the campaign that operate at this time. */
+/** The runs of the campaign that operate at this time. */
 export async function jobs(ctx: Ctx, c: string): Promise<JobStatus[]> {
   const out: JobStatus[] = [];
   for (const attr of await taskDirs(ctx, c)) {
     const job = await taskJob(ctx, c, attr);
-    if (job !== null) out.push({ attr: job.attr, kind: job.kind, id: job.id, started: job.started });
+    if (job !== null) out.push({ attr: job.attr, id: job.id, started: job.started });
   }
   return out;
 }
@@ -369,15 +317,19 @@ export async function enqueue(ctx: Ctx, c: string, attr: string, time = new Date
   }
 }
 
-/** Removes the task from the queue. Gives `false` when the queue did not have it. */
+/**
+ * Removes the task from the queue, and also its question: see `addQuestion`. Gives `false` when the queue did not
+ * have the task.
+ */
 export async function dequeue(ctx: Ctx, c: string, attr: string): Promise<boolean> {
   try {
     await unlink(join(queueDir(ctx, c), check(attr, ATTR, "an attribute")));
-    return true;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw e;
   }
+  await rm(questionFile(ctx, c, attr), { force: true });
+  return true;
 }
 
 /** The attributes of the queue, in the sequence of the times of the entries. Entries with the same time are in the sequence of their names. */
@@ -395,6 +347,35 @@ export async function listQueue(ctx: Ctx, c: string): Promise<string[]> {
 /** Removes each entry of the queue. */
 export async function clearQueue(ctx: Ctx, c: string): Promise<void> {
   for (const attr of await listQueue(ctx, c)) await dequeue(ctx, c, attr);
+}
+
+/**
+ * Writes the question of a person into `question.md` of the task directory, then adds the task to the queue. The next
+ * run of the task gets the question. A task with a job or with an entry gives an error with status 409. Thus one
+ * question waits for each task, and a question does not change the run that operates.
+ */
+export function addQuestion(ctx: Ctx, c: string, attr: string, question: string): Promise<void> {
+  return serial(`question:${c}`, async () => {
+    if ((await taskJob(ctx, c, attr)) !== null) fail(409, `the task ${attr} has a job`);
+    if ((await listQueue(ctx, c)).includes(attr)) fail(409, `the task ${attr} is in the queue`);
+    await writeAtomic(questionFile(ctx, c, attr), `${question.trim()}\n`);
+    await enqueue(ctx, c, attr);
+  });
+}
+
+/**
+ * Moves the question of the task into the directory of the run `id`, and gives its text. `null` when the task has no
+ * question. The runner does this when the run starts, and the fleet does it for a run that did not start.
+ */
+export async function takeQuestion(ctx: Ctx, c: string, attr: string, id: string): Promise<string | null> {
+  const to = join(runDir(ctx, c, attr, id), "question.md");
+  try {
+    await rename(questionFile(ctx, c, attr), to);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  return ((await readText(to)) ?? "").trim();
 }
 
 const fleetFile = (ctx: Ctx, c: string) => join(stateDir(ctx, c), "fleet.yaml");

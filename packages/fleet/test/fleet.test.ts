@@ -1,7 +1,8 @@
 /**
  * The fleet with a test script as `zellij`. The script records its arguments and gives the names of the tabs. For
- * the tab of a run, it starts a process with the words `run t <attr>`. Then it writes a `running` record with the
- * `pid` of that process, as a runner does. For the task `none`, it writes no record: the run does not start.
+ * the tab of a run, it starts a process with the words `run t <attr>`. Then it moves the question of the task into
+ * the run directory and writes a `running` record with the `pid` of that process, as a runner does. For the tasks
+ * `none` and `lost`, it writes no record: the run does not start.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -11,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
-import { enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, readFleet, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
+import { addQuestion, dequeue, enqueue, exists, fleetAlive, fleetTick, jobs, listQueue, listRuns, questionFile, readFleet, runDir, runFleet, writeFleet, writeRun, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
 
 let tmp = "";
 let calls = "";
@@ -26,7 +27,7 @@ before(async () => {
   await writeFile(join(ctx.root, "campaigns", "t", "campaign.yaml"), "name: t\ntitle: Test\nissue: { repo: NixOS/nixpkgs, number: 1 }\nbranch_prefix: t/\n");
   // The `concurrency` of the settings: the default of `SettingsSchema` is also 2.
   await writeSettings(ctx, { fork: "someone", model: "claude-opus-5-5", concurrency: 2 });
-  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **a** — `/a`\n- [ ] **b** — `/b`\n- [ ] **c** — `/c`\n- [ ] **none** — `/d`\n") });
+  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **a** — `/a`\n- [ ] **b** — `/b`\n- [ ] **c** — `/c`\n- [ ] **none** — `/d`\n- [ ] **lost** — `/e`\n") });
   calls = join(tmp, "zellij.txt");
   const zellij = join(tmp, "zellij.sh");
   const record = `id: "%s"\\nattr: %s\\nstarted: "2026-01-01T00:00:00Z"\\nfinished: null\\nstatus: running\\nmodel: m\\npid: %s\\nbase: ""\\nhead: null\\ncommits: 0\\nchecks: []\\nlint: null\\nerror: null\\n`;
@@ -35,11 +36,13 @@ before(async () => {
 printf '%s\\n' "$1 $2 $3 $4 $5 $6" >> ${calls}
 [ "$3" = action ] || exit 0
 attr=\${6#t/}
-[ "$attr" = none ] && exit 0
+case "$attr" in none|lost) exit 0;; esac
 "${process.execPath}" -e 'setTimeout(() => {}, 60000)' run t "$attr" >/dev/null 2>&1 &
 id=$(date -u +%Y%m%d-%H%M%S)
-mkdir -p "${ctx.data}/state/t/tasks/$attr/runs/$id"
-printf '${record}' "$id" "$attr" "$!" > "${ctx.data}/state/t/tasks/$attr/runs/$id/run.yaml"
+task="${ctx.data}/state/t/tasks/$attr"
+mkdir -p "$task/runs/$id"
+[ -f "$task/question.md" ] && mv "$task/question.md" "$task/runs/$id/question.md"
+printf '${record}' "$id" "$attr" "$!" > "$task/runs/$id/run.yaml"
 `;
   await writeFile(zellij, script);
   await chmod(zellij, 0o755);
@@ -108,4 +111,37 @@ test("the fleet stops when the queue is empty, and a second fleet stops at its s
   }
   await once(other, "exit");
   assert.equal(await fleetAlive(ctx, "t"), false, "the pid of fleet.yaml stopped");
+});
+
+test("a question is a run entry: the fleet starts the run of the task, and a run that does not start gets the question", async () => {
+  // The run of `c` of the first test operates, and the second test left the entry of `c` in the queue.
+  await finish("c");
+  await dequeue(ctx, "t", "c");
+  const seen = (await tabs()).length;
+  const tab = (attr: string) => `-s patchix action new-tab --name t/${attr}`;
+  // As the server: `question.md` of the task directory and the usual entry of the task.
+  await addQuestion(ctx, "t", "a", "Why?");
+  await enqueue(ctx, "t", "b");
+  // The first test wrote a `failed` run of `none`, possibly in this second. The task `lost` has no run.
+  await addQuestion(ctx, "t", "lost", "Is the symlink enough?");
+  assert.deepEqual(await listQueue(ctx, "t"), ["a", "b", "lost"]);
+
+  await fleetTick(ctx, "t", opts);
+  assert.deepEqual((await tabs()).slice(seen), [tab("a"), tab("b")], "a run with a question has the tab of a run");
+  assert.deepEqual(await listQueue(ctx, "t"), ["lost"]);
+  const [asked] = await listRuns(ctx, "t", "a");
+  assert.ok(asked !== undefined);
+  assert.equal(await readFile(join(runDir(ctx, "t", "a", asked.id), "question.md"), "utf8"), "Why?\n", "the runner took the question");
+  await assert.rejects(addQuestion(ctx, "t", "a", "Again?"), /the task a has a job/);
+
+  await finish("a");
+  await fleetTick(ctx, "t", opts);
+  assert.deepEqual((await tabs()).slice(seen + 2), [tab("lost")]);
+  const [failed] = await listRuns(ctx, "t", "lost");
+  assert.deepEqual([failed?.status, failed?.error, failed?.question, failed?.pid], ["failed", "the run did not start", "Is the symlink enough?", null]);
+  assert.equal(await readFile(join(runDir(ctx, "t", "lost", failed?.id ?? ""), "question.md"), "utf8"), "Is the symlink enough?\n");
+  assert.equal(await exists(questionFile(ctx, "t", "lost")), false, "the failed run took the question");
+  assert.deepEqual((await jobs(ctx, "t")).map((j) => j.attr), ["b"]);
+  await finish("b");
+  assert.equal(await fleetTick(ctx, "t", opts), false, "the queue is empty");
 });

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { CommitProblems, JobStatus, TaskDetail, TaskView } from "@patchix/common";
+import type { CommitProblems, JobStatus, JobsView, TaskDetail, TaskView } from "@patchix/common";
 import { Badge, StateChip } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
 import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
+import { TextArea } from "../components/Field.tsx";
 import { Link } from "../components/Link.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Progress } from "../components/Progress.tsx";
@@ -11,7 +12,6 @@ import { useToast } from "../components/Toast.tsx";
 import { useClient } from "../client.tsx";
 import { ago, pullUrl, short, time } from "../format.ts";
 import { useAction, useDebounced, useLoad, useSignals } from "../hooks.ts";
-import { AsksSection } from "./AsksSection.tsx";
 import { PublishTab } from "./PublishTab.tsx";
 import { RunsSection } from "./RunsSection.tsx";
 import { PrCell } from "./shared.tsx";
@@ -75,12 +75,13 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
       jobs.replace({ jobs: signal.jobs, queue: signal.queue, fleet: signal.fleet });
     }
   });
+  const place = jobs.data?.queue.indexOf(attr) ?? -1;
   const start = useAction(async () => {
     jobs.replace(await client.queueRuns(c, { attrs: [attr] }));
     toast(`${attr} is in the queue`, "The fleet starts the run in a free job place.");
   });
   const stop = useAction(async () => {
-    const queued = jobs.data?.queue.includes(attr) === true;
+    const queued = place >= 0;
     jobs.replace(await client.stopJob(c, attr));
     detail.reload();
     toast(queued ? `${attr} is not in the queue now` : `The job of ${attr} stops`);
@@ -91,7 +92,7 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
   }
   const { task, campaign } = detail.data;
   const job = (jobs.data?.jobs ?? []).find((j) => j.attr === attr) ?? null;
-  const place = jobs.data?.queue.indexOf(attr) ?? -1;
+  const busy = job !== null ? "A job of this task operates." : place >= 0 ? "The task is in the queue." : null;
   return (
     <div className="stack">
       <header className="task-title">
@@ -122,11 +123,19 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
                   <JobRow job={job} place={place} runs={task.runs.length} starting={start.pending} stopping={stop.pending} onRun={() => void start.run()} onStop={() => void stop.run()} />
                   {start.error !== null && <Notice tone="error">Queue: {start.error}</Notice>}
                   {stop.error !== null && <Notice tone="error">Stop: {stop.error}</Notice>}
+                  <QuestionRow
+                    campaign={c}
+                    attr={attr}
+                    busy={busy}
+                    onJobs={(view) => {
+                      jobs.replace(view);
+                      detail.reload();
+                    }}
+                  />
                   <WorktreeRow campaign={c} task={task} onDetail={detail.replace} onChanged={detail.reload} />
                 </section>
                 <CommitProblemsNotice problems={detail.data.commit_problems} />
-                <RunsSection campaign={campaign} task={task} />
-                <AsksSection campaign={c} attr={attr} asks={detail.data.asks} onAsked={detail.reload} />
+                <RunsSection campaign={campaign} task={task} queued={place >= 0} question={detail.data.question} />
               </div>
             ),
           },
@@ -183,7 +192,7 @@ function IssueEntry({ task, repo, hasSource }: { task: TaskView; repo: string; h
 
 interface JobRowProps {
   job: JobStatus | null;
-  /** The position of the task in the queue, from 0. -1 when the queue does not have the task. */
+  /** The position of the run entry of the task in the queue, from 0. -1 when the queue does not have it. */
   place: number;
   runs: number;
   starting: boolean;
@@ -205,7 +214,7 @@ function JobRow({ job, place, runs, starting, stopping, onRun, onStop }: JobRowP
           <Button variant="danger" pending={stopping} onClick={onStop}>
             Remove from queue
           </Button>
-          <span className="small muted">{place === 0 ? "The task is the first in the queue." : `The queue has ${place} ${place === 1 ? "task" : "tasks"} before this task.`}</span>
+          <span className="small muted">{place === 0 ? "The task is the first in the queue." : `The queue has ${place} ${place === 1 ? "entry" : "entries"} before this task.`}</span>
         </>
       )}
       {job !== null && (
@@ -216,16 +225,51 @@ function JobRow({ job, place, runs, starting, stopping, onRun, onStop }: JobRowP
                 Stop
               </Button>
             }
-            title={`Stop the ${job.kind} ${job.id}?`}
+            title={`Stop the run ${job.id}?`}
             description="The agent stops. The worktree and the files of the job stay."
             confirmLabel="Stop"
             onConfirm={onStop}
           />
           <span className="small muted">
-            The {job.kind} <span className="mono">{job.id}</span> operates. It started <span title={time(job.started)}>{ago(job.started)}</span>.
+            The run <span className="mono">{job.id}</span> operates. It started <span title={time(job.started)}>{ago(job.started)}</span>.
           </span>
         </>
       )}
+    </div>
+  );
+}
+
+const MAX_QUESTION = 4000;
+
+interface QuestionRowProps {
+  campaign: string;
+  attr: string;
+  /** The task has a job or an entry in the queue: the server rejects a question. */
+  busy: string | null;
+  onJobs: (view: JobsView) => void;
+}
+
+/** A question of a person for the agent. The task goes into the queue, and its next run continues the session of `claude` with the question. */
+function QuestionRow({ campaign, attr, busy, onJobs }: QuestionRowProps) {
+  const client = useClient();
+  const toast = useToast();
+  const [question, setQuestion] = useState("");
+  const ask = useAction(async () => {
+    onJobs(await client.ask(campaign, attr, { question: question.trim() }));
+    setQuestion("");
+    toast(`${attr} is in the queue`, "The next run of the task gets the question.");
+  });
+  const reason = busy ?? (question.length > MAX_QUESTION ? `The question has more than ${MAX_QUESTION} characters.` : null);
+  return (
+    <div className="stack" aria-label="Ask the agent">
+      <TextArea label="Question" hideLabel rows={3} maxLength={MAX_QUESTION} value={question} onValueChange={setQuestion} placeholder="A question for the agent" />
+      <div className="row">
+        <Button disabled={reason !== null || question.trim() === ""} pending={ask.pending} onClick={() => void ask.run()} title="Add the task to the queue. The next run continues the session of the agent in the worktree, with the question.">
+          Ask
+        </Button>
+        <span className="small muted">{reason ?? "The agent replies, and it changes the files only when the question tells it."}</span>
+      </div>
+      {ask.error !== null && <Notice tone="error">{ask.error}</Notice>}
     </div>
   );
 }

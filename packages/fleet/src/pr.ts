@@ -82,8 +82,10 @@ async function renderPr(ctx: Ctx, campaign: Campaign, attr: string, pr: Pr, body
   const run = await readRun(ctx, campaign.name, attr, pr.run).catch(() => null);
   const worktree = worktreePath(ctx, campaign, attr);
   const checks = new Map<string, string>();
+  // A run with a question can use the checks of a previous run: see `RunSchema.checks_of`.
+  const checksRun = run?.checks_of ?? pr.run;
   for (const check of campaign.checks) {
-    const output = await readText(checkFile(runDir(ctx, campaign.name, attr, pr.run), check.name));
+    const output = await readText(checkFile(runDir(ctx, campaign.name, attr, checksRun), check.name));
     if (output !== null) checks.set(check.name, hidePaths(ctx, worktree, output));
   }
   return render({ body, campaign, attr, pr: number, checks, models: run === null ? [] : [run.model] });
@@ -148,7 +150,7 @@ export function createOrUpdatePr(ctx: Ctx, c: string, attr: string, input: Publi
     const marks = (await renderPr(ctx, campaign, attr, pr, body, pr.number)).problems;
     if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
     const job = await taskJob(ctx, c, attr);
-    if (job !== null) fail(409, `the task ${attr} has a job that operates: the ${job.kind} ${job.id}`);
+    if (job !== null) fail(409, `the task ${attr} has a job that operates: the run ${job.id}`);
     const newest = (await listRuns(ctx, c, attr))[0];
     // A person examined an `unverified` run on the page: the tick box of `input` shows it.
     if (newest === undefined || !publishable(newest)) fail(409, `the newest run of ${attr} is not ok or unverified`);

@@ -14,7 +14,7 @@ export const MixedCounts: Story = {
   decorators: [
     withMock(() => ({
       campaigns: [
-        { campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", "run", 6), job("gajim", "run", 2)] },
+        { campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", 6), job("gajim", 2)] },
         {
           campaign: { ...CAMPAIGN, name: "openssl-1-1", title: "Packages that still use OpenSSL 1.1", issue: { repo: "NixOS/nixpkgs", number: 269713 } },
           synced: null,

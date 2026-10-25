@@ -9,7 +9,6 @@ import {
   badMarkDescription,
   HEAD,
   at,
-  ask,
   description,
   failedPublishLog,
   failedRun,
@@ -19,6 +18,8 @@ import {
   okRun,
   prMeta,
   publishLog,
+  QUESTION,
+  questionRun,
   roughDescription,
   runningRun,
   stoppedRun,
@@ -70,7 +71,7 @@ export const Running: Story = {
   },
   decorators: [
     seed(() => task(A, { state: "running", runs: [runningRun(A, 3)], worktree: worktreePath(A), head: HEAD }), {
-      jobs: [{ attr: A, kind: "run", id: idAt(3), started: at(3) }],
+      jobs: [job(A, 3)],
     }),
   ],
 };
@@ -118,16 +119,44 @@ export const RunPrompt: Story = {
   },
 };
 
-export const AskRunning: Story = {
-  parameters: { docs: { description: { story: "Work tab: an ask that operates. A notice gives the zellij tab of the ask, and its Prompt gives the prompt." } } },
+export const QuestionQueued: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: each job place of the campaign is in use. The person asks a question: the task goes into the queue, and the run list starts with the queued run and its question. The fleet starts the run when a job stops.",
+      },
+    },
+  },
   decorators: [
     seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }), {
-      asks: { [A]: [ask(A, 2, { status: "running", finished: null, pid: 51234, question: "Does the package also read the bundle at run time?" })] },
-      jobs: [job(A, "ask", 2)],
+      jobs: [job("calibre", 4), job("anki", 1)],
     }),
   ],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole("button", { name: "Prompt" }));
+    await userEvent.type(await canvas.findByPlaceholderText("A question for the agent"), QUESTION);
+    await userEvent.click(canvas.getByRole("button", { name: "Ask" }));
+    const runs = await canvas.findByRole("region", { name: "Runs" });
+    await within(runs).findByText(QUESTION);
+    await within(runs).findByText("queued");
+    await canvas.findByText("The task is in the queue.");
+  },
+};
+
+export const QuestionAnswered: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: a run with a question. The question is above the tabs, and the Reply tab gives the reply of the agent. The run did not move the tip of the branch: the Checks tab gives the checks of the previous run.",
+      },
+    },
+  },
+  decorators: [seed(() => task(A, { state: "ready", runs: [questionRun(A, 5), okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }))],
+  play: async ({ canvas, userEvent }) => {
+    await canvas.findByLabelText(/^Question of run /);
+    await userEvent.click(await canvas.findByRole("tab", { name: "Reply" }));
+    await canvas.findByText(/The package reads the bundle one time, at import time/);
+    await userEvent.click(await canvas.findByRole("tab", { name: /Checks/ }));
+    await canvas.findByRole("status", { name: "Checks of a previous run" });
   },
 };
 
@@ -192,19 +221,12 @@ export const ReadyNoDraft: Story = {
 };
 
 export const ReadyDraft: Story = {
-  parameters: { docs: { description: { story: "5. Publish tab, ready, with a draft: two lint findings and an ask that operates. The findings do not stop the pull request: the ask stops it, and the pull request button gives the reason." } } },
+  parameters: { docs: { description: { story: "5. Publish tab, with a draft: two lint findings and a run with a question that operates. The findings do not stop the pull request: the run stops it, and the pull request button gives the reasons." } } },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "running", runs: [{ ...runningRun(A, 2), question: QUESTION }, okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
       drafts: { [A]: roughDescription(A) },
-      asks: {
-        [A]: [
-          ask(A, 2, { status: "running", finished: null, pid: 51234, question: "Does the package also read the bundle at run time?" }),
-          ask(A, 15, { files: ["pkgs/development/python-modules/wassima/default.nix"], question: "Why is the symlink sufficient? Add a test for the import of the bundle." }),
-          ask(A, 60),
-        ],
-      },
-      jobs: [job(A, "ask", 2)],
+      jobs: [job(A, 2)],
     }),
   ],
 };

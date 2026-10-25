@@ -29,5 +29,5 @@ type Story = StoryObj<typeof meta>;
 export const NoneOn: Story = {};
 export const SomeOn: Story = { args: { initial: ["failed", "unverified", "ready"] } };
 export const WithoutCounts: Story = {
-  render: () => <FilterChips label="Kind" options={[{ value: "run", label: "run" }, { value: "ask", label: "ask", tone: "purple" }]} value={["ask"]} onValueChange={() => undefined} />,
+  render: () => <FilterChips label="Tag" options={[{ value: "agent", label: "agent" }, { value: "imported", label: "imported", tone: "purple" }]} value={["imported"]} onValueChange={() => undefined} />,
 };

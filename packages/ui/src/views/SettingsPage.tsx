@@ -51,7 +51,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
   const changed = settings !== null && (settings.fork !== view.fork || settings.model !== view.model || settings.concurrency !== view.concurrency);
   const save = useAction(async (next: Settings) => {
     onSaved(await client.saveSettings(next));
-    toast("The settings are saved", "The next runs and asks use them.");
+    toast("The settings are saved", "The next runs use them.");
   });
   const set = (key: keyof Draft) => (value: string) => setDraft((d) => ({ ...d, [key]: value }));
   const login = view.fork_effective ?? "";
@@ -83,7 +83,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
               : "The GitHub user of the fork. Empty: the gh login."
           }
         />
-        <TextField label="model" value={draft.model} onValueChange={set("model")} error={errors.model} autoComplete="off" spellCheck={false} description="The claude model of the runs and the asks." />
+        <TextField label="model" value={draft.model} onValueChange={set("model")} error={errors.model} autoComplete="off" spellCheck={false} description="The claude model of the runs." />
         <TextField
           label="concurrency"
           type="number"
@@ -93,7 +93,7 @@ function SettingsForm({ view, onSaved }: { view: SettingsView; onSaved: (view: S
           value={draft.concurrency}
           onValueChange={set("concurrency")}
           error={errors.concurrency}
-          description="The maximum number of runs and asks of one campaign at the same time."
+          description="The maximum number of runs of one campaign at the same time."
         />
         {view.fork_effective === null && (
           <Notice tone="warning">No fork: the settings have no fork, and gh api user gave an error. Set the fork, or log in to gh.</Notice>

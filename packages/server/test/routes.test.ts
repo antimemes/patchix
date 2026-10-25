@@ -3,7 +3,7 @@
  * repository, thus `git push` cannot start. Only the last test makes a repository, without the remote `fork`. A test script operates as `zellij`: it records its arguments, gives
  * the names of the tabs and does not start a process. For the tab of a fleet, it writes `fleet.yaml` with
  * `PATCHIX_TEST_FLEET_PID`. Other test scripts operate as `gh` for the `labels` and the `refresh` routes. A runner
- * or a fleet of a test is a process with the words `run t <attr>`, `ask t <attr>` or `fleet t` in its command line:
+ * or a fleet of a test is a process with the words `run t <attr>` or `fleet t` in its command line:
  * see `alive`.
  */
 import assert from "node:assert/strict";
@@ -13,9 +13,9 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { AskSchema, CampaignSummarySchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, RunCommitsSchema, SettingsViewSchema, TaskDetailSchema, type Run } from "@patchix/common";
+import { CampaignSummarySchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, RunCommitsSchema, SettingsViewSchema, TaskDetailSchema, type Run } from "@patchix/common";
 import { parseIssueTasks } from "@patchix/fleet";
-import { askDir, checkFile, exists, readAsk, runDir, writeAsk, writeDraft, writePr, writeRun, writeTasks, type Ctx } from "@patchix/fleet";
+import { checkFile, exists, questionFile, runDir, writeDraft, writePr, writeRun, writeTasks, type Ctx } from "@patchix/fleet";
 import type { Hono } from "hono";
 import { changeOf } from "../src/events.ts";
 import { app } from "../src/routes.ts";
@@ -25,7 +25,7 @@ let ctx: Ctx;
 let api: Hono;
 let calls = "";
 const RUN = "20260101-000000";
-const run = (attr: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, attr, tags: [], started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], lint: 0, error: null });
+const run = (attr: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, attr, tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], checks_of: null, lint: 0, error: null });
 
 /** A process with the words of `marker` in its command line. */
 async function marker(words: string) {
@@ -49,6 +49,7 @@ before(async () => {
   await writeRun(ctx, "t", { ...run("foo", RUN, "ok", null), finished: "f" });
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "log.txt"), "the log\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "prompt.md"), "the prompt\n");
+  await writeFile(join(runDir(ctx, "t", "foo", RUN), "reply.md"), "the reply\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "description.md"), "the description\n");
   await mkdir(join(runDir(ctx, "t", "foo", RUN), "checks"));
   await writeFile(checkFile(runDir(ctx, "t", "foo", RUN), "harness"), "OK\n");
@@ -57,7 +58,7 @@ before(async () => {
   calls = join(tmp, "zellij.txt");
   const zellij = join(tmp, "zellij.sh");
   const fleet = `[ "$6" = "t fleet" ] && printf 'pid: %s\\nstarted: x\\n' "$PATCHIX_TEST_FLEET_PID" > ${join(ctx.data, "state", "t", "fleet.yaml")}\n`;
-  await writeFile(zellij, `#!/bin/sh\n[ "$4" = query-tab-names ] && printf 'Tab #1\\nt fleet\\nt/foo/ask\\n' && exit 0\nfor a in "$@"; do printf '%s\\n' "$a" >> ${calls}; done\necho --- >> ${calls}\n${fleet}exit 0\n`);
+  await writeFile(zellij, `#!/bin/sh\n[ "$4" = query-tab-names ] && printf 'Tab #1\\nt fleet\\n' && exit 0\nfor a in "$@"; do printf '%s\\n' "$a" >> ${calls}; done\necho --- >> ${calls}\n${fleet}exit 0\n`);
   await chmod(zellij, 0o755);
   process.env["PATCHIX_ZELLIJ_BIN"] = zellij;
   api = app(ctx);
@@ -97,6 +98,7 @@ test("the text files of a run", async () => {
   assert.match(log.headers.get("Content-Type") ?? "", /^text\/plain/);
   assert.equal(await log.text(), "the log\n");
   assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/prompt`)).text(), "the prompt\n");
+  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/reply`)).text(), "the reply\n");
   assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/description`)).text(), "the description\n");
   assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/harness`)).text(), "OK\n");
   assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/other`)).status, 404);
@@ -111,7 +113,7 @@ test("the text files of a run", async () => {
 test("the draft, the lint and the conditions of the pull request", async () => {
   const first = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
   assert.equal(first.campaign.name, "t");
-  assert.deepEqual(first.asks, []);
+  assert.equal(first.question, null);
   assert.match(first.rendered ?? "", /Claude Code used Claude Opus 5\.5\. This pull request description[^\n]*I established confidence in this output: by manual review/);
   assert.deepEqual(first.campaign_words, ["patchix"]);
   assert.deepEqual(first.lint?.findings, []);
@@ -152,13 +154,12 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the newest run of foo is not ok or unverified", publish_log: null } });
   for (const id of ["20260101-000010", "20260101-000011"]) await rm(runDir(ctx, "t", "foo", id), { recursive: true });
 
-  // An ask that operates is a job of the task: the pull request waits. The test does not start the push.
-  const ask = { id: "20260101-000005", attr: "foo", question: "Why?", started: "2026-01-01T00:00:00Z", finished: null, model: "m", files: [], error: null };
-  const runner = await marker("ask t foo 20260101-000005");
-  await writeAsk(ctx, "t", { ...ask, status: "running", pid: runner.pid ?? null });
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the task foo has a job that operates: the ask 20260101-000005", publish_log: null } });
-  await writeAsk(ctx, "t", { ...ask, status: "ok", finished: "f", pid: null });
+  // A run with a question that operates is a job of the task: the pull request waits. The test does not start the push.
+  const runner = await marker("run t foo");
+  await writeRun(ctx, "t", { ...run("foo", "20260101-000005", "running", runner.pid ?? null), question: "Why?" });
+  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the task foo has a job that operates: the run 20260101-000005", publish_log: null } });
   runner.kill();
+  await rm(runDir(ctx, "t", "foo", "20260101-000005"), { recursive: true });
 
   assert.equal((await json("/api/campaigns/t/tasks/foo/draft", send("PUT", { title: "" }))).status, 400);
   const draft = { title: "foo: new title", labels: ["x"], description: "Part of #1. It is a bad sentense.\n", words: ["foo"] };
@@ -202,7 +203,7 @@ test("the server adds the tasks to the queue and starts the fleet in zellij", as
     await writeRun(ctx, "t", run("baz", "20260101-000001", "running", runner.pid ?? null));
     const added = await jobsView(send("POST", { attrs: ["qux", "baz", "foo"] }));
     assert.equal(added.status, 202);
-    assert.deepEqual(added.view, { jobs: [{ attr: "baz", kind: "run", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], fleet: true }, "the queue keeps the sequence of the request");
+    assert.deepEqual(added.view, { jobs: [{ attr: "baz", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], fleet: true }, "the queue keeps the sequence of the request");
     const args = (await readFile(calls, "utf8")).split("---\n");
     // The test zellij lists no session: the server makes it, then opens the tab of the fleet.
     assert.deepEqual(args[0]?.trim().split("\n"), ["list-sessions", "--no-formatting"]);
@@ -241,27 +242,45 @@ test("stop sends SIGTERM to the runner", async () => {
   assert.match(await readFile(join(runDir(ctx, "t", "qux", "20260101-000003"), "run.yaml"), "utf8"), /status: running/, "the server does not write run.yaml");
 });
 
-test("an ask writes the question and starts the runner in zellij", async () => {
-  assert.equal((await json("/api/campaigns/t/tasks/foo/ask", send("POST", { question: " " }))).status, 400, "no question");
-  const res = await json("/api/campaigns/t/tasks/foo/ask", send("POST", { question: "Why?" }));
-  assert.equal(res.status, 201);
-  const ask = AskSchema.parse(res.body);
-  assert.equal(ask.question, "Why?");
-  assert.deepEqual([ask.status, ask.pid], ["running", null], "the ask starts");
-  assert.equal(await readFile(join(askDir(ctx, "t", "foo", ask.id), "question.md"), "utf8"), "Why?\n");
-  assert.equal(await exists(join(askDir(ctx, "t", "foo", ask.id), "ask.yaml")), false, "the server does not write ask.yaml");
-  assert.equal((await readAsk(ctx, "t", "foo", ask.id)).status, "running");
-  assert.match(await readFile(calls, "utf8"), /"ask" "t" "foo" "\d{8}-\d{6}"/);
-  const detail = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
-  assert.equal(detail.asks[0]?.id, ask.id);
-  assert.equal((await json("/api/campaigns/t/tasks/foo/ask", send("POST", { question: "Again?" }))).status, 409, "the ask is a job");
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/asks/${ask.id}/reply`)).status, 404);
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/asks/${ask.id}/prompt`)).status, 404, "the runner did not start");
-  await writeFile(join(askDir(ctx, "t", "foo", ask.id), "prompt.md"), "the prompt of the ask\n");
-  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/asks/${ask.id}/prompt`)).text(), "the prompt of the ask\n");
+test("a question writes question.md of the task and adds the task to the queue, also at the limit of the campaign", async () => {
+  assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: " " }))).status, 400, "no question");
+  assert.equal((await json("/api/campaigns/t/tasks/nope/question", send("POST", { question: "Why?" }))).status, 404);
+  assert.equal((await json("/api/campaigns/t/tasks/foo/ask", send("POST", { question: "Why?" }))).status, 404, "no ask route");
+  // Two runs operate: the campaign has the `concurrency` of the settings, 2, as its number of jobs.
+  const runners = [await marker("run t baz"), await marker("run t qux")];
+  const fleet = await marker("fleet t");
+  process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
+  const before = (await readFile(calls, "utf8")).length;
+  try {
+    for (const [i, attr] of ["baz", "qux"].entries()) await writeRun(ctx, "t", run(attr, "20260101-000004", "running", runners[i]?.pid ?? null));
+    const res = await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: " Why? " }));
+    assert.equal(res.status, 202);
+    assert.deepEqual(JobsViewSchema.parse(res.body).queue, ["foo"], "the entry of a question is the entry of a run");
+    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n");
+    const tabs = (await readFile(calls, "utf8")).slice(before);
+    assert.match(tabs, /^t fleet$/m, "the server starts the fleet");
+    assert.doesNotMatch(tabs, /"run"/, "only the fleet starts the run");
+    assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, "Why?");
+
+    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Again?" })), { status: 409, body: { error: "the task foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/question", send("POST", { question: "Why?" })), { status: 409, body: { error: "the task baz has a job" } });
+    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "a refused question does not replace the question");
+
+    assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/jobs/foo", { method: "DELETE" })).body).queue, []);
+    assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the question goes away with the entry");
+    assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, null);
+    assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Why?" }))).status, 202);
+    assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/queue", { method: "DELETE" })).body).queue, []);
+    assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the clear of the queue also removes the questions");
+  } finally {
+    delete process.env["PATCHIX_TEST_FLEET_PID"];
+    for (const r of runners) r.kill();
+    fleet.kill();
+  }
+  for (const attr of ["baz", "qux"]) await writeRun(ctx, "t", { ...run(attr, "20260101-000004", "failed", null), finished: "f" });
 });
 
-test("the settings: GET gives the file and the fork, PUT writes the file, and an ask obeys the concurrency", async () => {
+test("the settings: GET gives the file and the fork, and PUT writes the file", async () => {
   const gh = join(tmp, "gh-user.sh");
   await writeFile(gh, "#!/bin/sh\n[ \"$*\" = 'api user --jq .login' ] && echo octocat\n");
   await chmod(gh, 0o755);
@@ -280,9 +299,6 @@ test("the settings: GET gives the file and the fork, PUT writes the file, and an
     delete process.env["GH_TOKEN"];
     assert.equal(SettingsViewSchema.parse((await json("/api/settings")).body).token, false);
 
-    // The ask of the test before operates: with a `concurrency` of 1, the campaign has no free position.
-    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/ask", send("POST", { question: "Why?" })), { status: 409, body: { error: "the campaign has 1 jobs that operate, its limit" } });
-
     assert.equal((await json("/api/settings", send("PUT", { fork: "a/b" }))).status, 400, "not a GitHub login");
     assert.equal((await json("/api/settings", send("PUT", { concurrency: 0 }))).status, 400);
     assert.equal((await json("/api/settings", { method: "PUT", body: "nope" })).status, 400);
@@ -297,8 +313,8 @@ test("the settings: GET gives the file and the fork, PUT writes the file, and an
 test("changeOf", () => {
   assert.deepEqual(changeOf("cacert/tasks.yaml"), { campaign: "cacert", attr: null, view: true, job: false });
   assert.deepEqual(changeOf("cacert/tasks/python3Packages.foo/runs/20260101-000000/log.txt"), { campaign: "cacert", attr: "python3Packages.foo", view: true, job: false });
-  assert.deepEqual(changeOf("cacert/tasks/foo/asks/20260101-000000/ask.yaml"), { campaign: "cacert", attr: "foo", view: true, job: true });
-  assert.deepEqual(changeOf("cacert/tasks/foo/asks/20260101-000000/question.md"), { campaign: "cacert", attr: "foo", view: true, job: true });
+  assert.deepEqual(changeOf("cacert/tasks/foo/runs/20260101-000000/run.yaml"), { campaign: "cacert", attr: "foo", view: true, job: true });
+  assert.deepEqual(changeOf("cacert/tasks/foo/question.md"), { campaign: "cacert", attr: "foo", view: true, job: false }, "the task page shows the question");
   assert.deepEqual(changeOf("cacert/queue/python3Packages.foo"), { campaign: "cacert", attr: null, view: false, job: true });
   assert.deepEqual(changeOf("cacert/fleet.yaml"), { campaign: "cacert", attr: null, view: false, job: true });
   assert.equal(changeOf("cacert/fleet.log"), null);

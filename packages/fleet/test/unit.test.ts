@@ -15,23 +15,24 @@ import { parseLint, withWords } from "../src/lint.ts";
 import { refreshPrs, renderDraft } from "../src/pr.ts";
 import { parseWords } from "../src/run.ts";
 import {
+  addQuestion,
   alive,
-  askDir,
   checkFile,
   clearQueue,
   dequeue,
   enqueue,
-  idTime,
+  exists,
   jobs,
-  listAsks,
   listQueue,
   listRuns,
   queueDir,
+  questionFile,
   readCampaign,
   readPr,
   readSettings,
   runDir,
   runId,
+  takeQuestion,
   taskState,
   taskViews,
   tomlWords,
@@ -46,7 +47,7 @@ import { mergeTasks, parseSource } from "../src/sync.ts";
 import { cliLayout, kdlString, launch } from "../src/zellij.ts";
 
 const task: Task = { attr: "foo", paths: [], notes: "", checked: false, pr: null, remark: null, in_issue: true, in_source: false, branch: null };
-const run = (status: Run["status"], id = "20260101-000000", pid: number | null = null): Run => ({ id, attr: "foo", tags: [], started: "2026-01-01T00:00:00Z", finished: null, status, model: "m", pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null });
+const run = (status: Run["status"], id = "20260101-000000", pid: number | null = null): Run => ({ id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "m", pid, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: null });
 const pr = (number: number | null, state: Pr["state"] = "open"): Pr => ({ title: "t", labels: [], run: "20260101-000000", words: [], number, url: null, created: null, pushed: null, updated: null, state, merged: null, confirmed: null });
 
 test("publishable", () => {
@@ -309,7 +310,7 @@ test("alive: the process operates and its command line contains the marker", asy
     assert.equal(alive(pid, "run t foo.bar"), true);
     assert.equal(alive(pid, "run t foo"), false, "the marker has complete words");
     assert.equal(alive(pid, "run t"), true);
-    assert.equal(alive(pid, "ask t foo.bar"), false);
+    assert.equal(alive(pid, "fleet t foo.bar"), false);
     assert.equal(alive(process.pid, "run t foo.bar"), false, "a live process without the marker");
     assert.equal(alive(spawnSync("true").pid, "true"), false, "a process that stopped");
     assert.equal(alive(0, "run"), false);
@@ -374,38 +375,44 @@ test("a running record without a live runner is read as stopped, and the file do
     assert.deepEqual([stopped?.status, stopped?.error], ["stopped", "the process stopped"]);
     assert.match(await readFile(join(runDir(ctx, "t", "foo", "20260101-000001"), "run.yaml"), "utf8"), /status: running/, "the server does not write run.yaml");
     assert.equal((await listRuns(ctx, "t", "baz"))[0]?.status, "stopped", "a live pid without the marker: an other process got the pid");
-    assert.deepEqual(await jobs(ctx, "t"), [{ attr: "bar", kind: "run", id: "20260101-000002", started: "2026-01-01T00:00:00Z" }]);
+    assert.deepEqual(await jobs(ctx, "t"), [{ attr: "bar", id: "20260101-000002", started: "2026-01-01T00:00:00Z" }]);
   } finally {
     runner.kill();
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("an ask directory with question.md and without ask.yaml is an ask that starts, and fails after 2 minutes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "patchix-ask-"));
+test("the question of a person waits in the task directory until a run takes it, and it goes away with the entry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "patchix-question-"));
   const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
+  const runner = await markerProcess("run t foo");
   try {
-    const fresh = runId();
-    const old = runId(new Date(Date.now() - 3 * 60_000));
-    for (const id of [fresh, old, "20260101-000009"]) await mkdir(askDir(ctx, "t", "foo", id), { recursive: true });
-    await writeFile(join(askDir(ctx, "t", "foo", fresh), "question.md"), "Why?\n");
-    await writeFile(join(askDir(ctx, "t", "foo", old), "question.md"), "Old?\n");
-    const asks = await listAsks(ctx, "t", "foo");
-    assert.deepEqual(
-      asks.map((a) => [a.id, a.question, a.status, a.pid, a.error, a.started]),
-      [
-        [fresh, "Why?", "running", null, null, idTime(fresh)],
-        [old, "Old?", "failed", null, "the ask did not start", idTime(old)],
-      ],
-      "an empty ask directory is not an ask",
-    );
-    assert.deepEqual(await jobs(ctx, "t"), [{ attr: "foo", kind: "ask", id: fresh, started: idTime(fresh) }], "an ask that starts is a job");
+    await addQuestion(ctx, "t", "foo", " Why? \n");
+    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n");
+    assert.deepEqual(await listQueue(ctx, "t"), ["foo"], "the question adds the task to the queue");
+    await assert.rejects(addQuestion(ctx, "t", "foo", "Again?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo is in the queue");
+    assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "the second question does not replace the first");
+    assert.equal(await dequeue(ctx, "t", "foo"), true);
+    assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the question goes away with the entry");
+
+    await addQuestion(ctx, "t", "foo", "Is the symlink enough?");
+    const id = "20260101-000001";
+    await mkdir(runDir(ctx, "t", "foo", id), { recursive: true });
+    assert.equal(await takeQuestion(ctx, "t", "foo", id), "Is the symlink enough?");
+    assert.equal(await readFile(join(runDir(ctx, "t", "foo", id), "question.md"), "utf8"), "Is the symlink enough?\n", "the run directory gets question.md");
+    assert.equal(await takeQuestion(ctx, "t", "foo", id), null, "no question");
+    await dequeue(ctx, "t", "foo");
+
+    await writeRun(ctx, "t", { ...run("running", id, runner.pid ?? null), question: "Is the symlink enough?" });
+    await assert.rejects(addQuestion(ctx, "t", "foo", "Why?"), (e: Error & { status?: number }) => e.status === 409 && e.message === "the task foo has a job");
+    assert.deepEqual([await listQueue(ctx, "t"), await exists(questionFile(ctx, "t", "foo"))], [[], false]);
   } finally {
+    runner.kill();
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("the files of an older version load: the kind of a run, the review and the confirmation of a draft and the name of an ask", async () => {
+test("the files of an older version load: the kind of a run, and the review and the confirmation of a draft", async () => {
   const root = await mkdtemp(join(tmpdir(), "patchix-old-"));
   const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
   try {
@@ -415,18 +422,12 @@ test("the files of an older version load: the kind of a run, the review and the 
     await mkdir(runDir(ctx, "t", "foo", id), { recursive: true });
     await writeFile(join(runDir(ctx, "t", "foo", id), "run.yaml"), `${run.join("\n")}\n`);
     const [loaded] = await listRuns(ctx, "t", "foo");
-    assert.deepEqual([loaded?.tags, loaded?.status, "kind" in (loaded ?? {})], [[], "ok", false]);
+    assert.deepEqual([loaded?.tags, loaded?.status, "kind" in (loaded ?? {}), loaded?.question, loaded?.checks_of], [[], "ok", false, null, null]);
 
     const review = "review:\n  by: someone\n  at: 2026-01-01T00:00:00Z\n  examined: [diff]\n  note: I read the diff.\n";
     await writeFile(join(root, "state", "t", "tasks", "foo", "pr.yaml"), `title: t\nlabels: []\nrun: ${id}\nwords: []\n${review}number: null\nurl: null\ncreated: null\npushed: null\nupdated: null\n`);
     const pr = await readPr(ctx, "t", "foo");
     assert.deepEqual([pr?.title, pr?.state, pr?.confirmed, "review" in (pr ?? {})], ["t", "open", null, false]);
-
-    const ask = ["id: 20260101-000000", "attr: foo", "by: someone", "question: Why?", "started: 2026-01-01T00:00:00Z", "finished: null", "status: ok"];
-    await mkdir(askDir(ctx, "t", "foo", id), { recursive: true });
-    await writeFile(join(askDir(ctx, "t", "foo", id), "ask.yaml"), `${[...ask, "model: m", "pid: null", "files: []", "error: null"].join("\n")}\n`);
-    const [asked] = await listAsks(ctx, "t", "foo");
-    assert.deepEqual([asked?.question, "by" in (asked ?? {})], ["Why?", false]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

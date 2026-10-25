@@ -196,7 +196,7 @@ async function importRun(ctx: Ctx, campaign: Campaign, attr: string, b: Branch, 
     }
   }
   const time = now();
-  const run: Run = { id, attr, tags: ["imported"], started: time, finished: time, status: "ok", model, pid: null, base: b.base, head: b.tip, commits: 1, checks, lint: null, error: null };
+  const run: Run = { id, attr, tags: ["imported"], question: null, started: time, finished: time, status: "ok", model, pid: null, base: b.base, head: b.tip, commits: 1, checks, checks_of: null, lint: null, error: null };
   await writeRun(ctx, campaign.name, run);
   return run;
 }

@@ -84,6 +84,15 @@
   font-family: var(--mono);
   font-weight: 500;
 }
+/* The error of a run in the run list stays on one line. The title has the full text. */
+.run-list .run-error {
+  display: inline-block;
+  max-width: 22rem;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
 .commits {
   display: flex;
   flex-direction: column;
@@ -123,15 +132,7 @@
 .findings .mono {
   color: var(--fg-muted);
 }
-.ask {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.ask-question {
+.run-question {
   padding-left: 8px;
   border-left: 3px solid var(--border-strong);
   white-space: pre-wrap;

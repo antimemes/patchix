@@ -1,5 +1,5 @@
 /**
- * The runs and the asks with temporary repositories. Two bare repositories in a `file://` directory operate as
+ * The runs with temporary repositories. Two bare repositories in a `file://` directory operate as
  * GitHub: `NixOS/nixpkgs` (the issue repository) and `someone/nixpkgs` (the fork). A test script operates as `claude`.
  */
 import assert from "node:assert/strict";
@@ -13,21 +13,21 @@ import { CONFIRM_ERROR, type Campaign, type PublishInput } from "@patchix/common
 import { parseIssueTasks } from "../src/issue.ts";
 import {
   adopt,
-  askDir,
   cloneBase,
   commitProblems,
   createOrUpdatePr,
   draftFromRun,
   exists,
+  listRuns,
   publishLogOf,
   push,
+  questionFile,
   readCampaign,
   readDraft,
   readPr,
   readPublishLog,
   renderDraft,
   repoPath,
-  runAsk,
   runCommits,
   runDir,
   runSource,
@@ -73,10 +73,11 @@ words = [
 
 /**
  * The agent of the test. A run: one commit in the worktree, then `description.md` and `words.txt` in the run
- * directory. An ask: a reply on `stdout` and a change that is not committed. With `PATCHIX_TEST_NO_CONVERSATION`,
- * `--continue` gives an error. With `PATCHIX_TEST_NO_FIX`, a run makes no commit and writes a description with the
- * heading `## No small fix`; with the value `dirty`, it also changes a file. With `PATCHIX_TEST_NO_TRAILER`, the commit has
- * a `Co-Authored-By` line and no `Assisted-by` line.
+ * directory. A run with a question: a reply on `stdout`. When the question has the words `Amend the fix`, the agent
+ * changes the commit with `git commit --amend`. With `Change a file`, it changes a file without a commit. With
+ * `PATCHIX_TEST_NO_CONVERSATION`, `--continue` gives an error. With `PATCHIX_TEST_NO_FIX`, a run makes no commit and
+ * writes a description with the heading `## No small fix`; with the value `dirty`, it also changes a file. With
+ * `PATCHIX_TEST_NO_TRAILER`, the commit has a `Co-Authored-By` line and no `Assisted-by` line.
  */
 const CLAUDE = `#!/bin/sh
 set -e
@@ -84,7 +85,10 @@ case "$*" in
 *"# The question"*)
   case "$*" in *--continue*) if [ -n "$PATCHIX_TEST_NO_CONVERSATION" ]; then echo "No conversation found" >&2; exit 1; fi;; esac
   echo "The reply."
-  echo 'reply = 1;' >> pkgs/foo/default.nix
+  case "$*" in
+  *"Amend the fix"*) echo 'reply = 1;' >> pkgs/foo/default.nix; git -c user.name=t -c user.email=t@example.com commit -q --amend --no-edit -a;;
+  *"Change a file"*) echo 'reply = 1;' >> pkgs/foo/default.nix;;
+  esac
   exit 0;;
 esac
 if [ -n "$PATCHIX_TEST_NO_FIX" ]; then
@@ -158,7 +162,7 @@ before(async () => {
   process.env["PATCHIX_CLAUDE_BIN"] = claude;
   process.env["GH_TOKEN"] = TOKEN;
   ctx = { root, data: join(tmp, "data"), github: `file://${join(tmp, "gh")}` };
-  // The runs and the asks use the model of the settings.
+  // The runs use the model of the settings.
   await writeSettings(ctx, { fork: "someone", model: "claude-opus-5-6", concurrency: 2 });
   campaign = await readCampaign(ctx, "t");
   await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **foo** — `/share/foo/ca.pem` · trusts AAA\n- [ ] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n- [ ] **quux** — `/e`\n") });
@@ -184,6 +188,8 @@ test("a run with a commit, a description and a check that passes is ok", async (
   const dir = runDir(ctx, "t", "foo", run.id);
   assert.match(await readFile(join(dir, "diff.patch"), "utf8"), /\+ca = "cacert";/);
   assert.ok(await exists(join(dir, "description.md")));
+  assert.match(await readFile(join(dir, "reply.md"), "utf8"), /^fake claude in /, "reply.md is the stdout of claude");
+  assert.equal(run.question, null);
   assert.match(await readFile(join(dir, "checks", "harness.txt"), "utf8"), new RegExp(`^VERDICT foo emudhra: FIXED base=${master}$`, "m"));
   const prompt = await readFile(join(dir, "prompt.md"), "utf8");
   assert.ok(prompt.includes(`Run directory, for \`description.md\` and \`words.txt\`: \`${dir}\``));
@@ -310,7 +316,7 @@ esac
   }
 });
 
-test("a run without a commit and with the heading `## No small fix` is wontfix; with a change that is not committed, it is failed", async () => {
+test("a run without a commit and with the heading `## No small fix` is wontfix; with a change that is not committed, it is unverified", async () => {
   process.env["PATCHIX_TEST_NO_FIX"] = "1";
   try {
     const run = await startRun(ctx, "t", "baz");
@@ -319,7 +325,7 @@ test("a run without a commit and with the heading `## No small fix` is wontfix; 
     assert.equal((await taskViews(ctx, "t")).find((v) => v.attr === "baz")?.state, "wontfix");
     process.env["PATCHIX_TEST_NO_FIX"] = "dirty";
     const dirty = await startRun(ctx, "t", "baz");
-    assert.deepEqual([dirty.status, dirty.error], ["failed", "no commit; the worktree has changes without a commit"]);
+    assert.deepEqual([dirty.status, dirty.error, dirty.checks], ["unverified", "the worktree has changes without a commit", []], "the work of the agent does not make a run failed");
   } finally {
     delete process.env["PATCHIX_TEST_NO_FIX"];
   }
@@ -363,7 +369,7 @@ test("a commit that does not agree with the automation/AI policy does not change
 
 test("a run of a task that has a job is refused", async () => {
   const id = "20260101-000000";
-  const record = { id, attr: "foo", tags: [], started: "2026-01-01T00:00:00Z", finished: null, model: "m", base: "", head: null, commits: 0, checks: [], lint: null };
+  const record = { id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, model: "m", base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null };
   // A process with the words `run t foo` in its command line operates as the runner.
   const runner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)", "run", "t", "foo"], { stdio: "ignore" });
   await once(runner, "spawn");
@@ -391,26 +397,42 @@ test("the abort signal stops a run, and the run keeps the base of the branch", a
   }
 });
 
-test("an ask without a conversation starts claude again without --continue", async () => {
-  const id = "20260102-000000";
-  const dir = askDir(ctx, "t", "foo", id);
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, "question.md"), "Why this change?\n");
+test("a run with a question continues the conversation; the checks start only when the tip moved", async () => {
+  const first = (await listRuns(ctx, "t", "foo")).find((r) => r.status === "ok" && r.checks.length > 0);
+  assert.ok(first !== undefined);
+  const wt = worktreePath(ctx, campaign, "foo");
+  assert.equal(git(wt, "rev-parse", "HEAD"), first.head, "the tip of the branch is the head of the first run");
+  /** As the server: the question waits in the task directory, and the next run gets it. */
+  const ask = async (question: string) => {
+    await writeFile(questionFile(ctx, "t", "foo"), `${question}\n`);
+    const run = await startRun(ctx, "t", "foo");
+    const dir = runDir(ctx, "t", "foo", run.id);
+    const read = (file: string) => readFile(join(dir, file), "utf8");
+    assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the run took the question");
+    assert.deepEqual([run.question, await read("question.md"), await read("reply.md")], [question, `${question}\n`, "The reply.\n"]);
+    return { run, dir, read };
+  };
+
+  const asked = await ask("Why this change?");
+  assert.deepEqual([asked.run.status, asked.run.error, asked.run.head, asked.run.checks, asked.run.checks_of, asked.run.lint], ["ok", null, first.head, [], first.id, null], "the checks of the first run apply");
+  assert.equal(await exists(join(asked.dir, "checks")), false, "the runner did not start the checks");
+  assert.match(await asked.read("log.txt"), / -p <prompt\.md> --continue --model claude-opus-5-6 [^]*the checks of the run \d{8}-\d{6} apply: the branch did not change\n/);
+  const short = await asked.read("prompt.md");
+  assert.match(short, /^# The task\n[^]*\n\n# The question\n[^]*\n\nWhy this change\?\n$/, "the conversation has the instructions of the campaign: the prompt starts with the task block");
+
+  const dirty = await ask("Change a file, but do not commit it.");
+  assert.deepEqual([dirty.run.status, dirty.run.error, dirty.run.checks, dirty.run.checks_of], ["unverified", "the worktree has changes without a commit", [], null]);
+  git(wt, "checkout", "-q", "--", ".");
+
   process.env["PATCHIX_TEST_NO_CONVERSATION"] = "1";
   try {
-    const ask = await runAsk(ctx, "t", "foo", id);
-    assert.equal(ask.status, "ok", ask.error ?? "");
-    assert.deepEqual([ask.question, ask.model, ask.pid], ["Why this change?", "claude-opus-5-6", null], "the runner writes ask.yaml");
-    await assert.rejects(runAsk(ctx, "t", "foo", id), /not a new ask/);
-    assert.deepEqual(ask.files, ["pkgs/foo/default.nix"]);
-    assert.equal(await readFile(join(dir, "reply.md"), "utf8"), "The reply.\n");
-    assert.match(await readFile(join(dir, "diff.patch"), "utf8"), /\+reply = 1;/);
-    const log = await readFile(join(dir, "log.txt"), "utf8");
-    assert.match(log, /again without --continue/);
-    assert.ok(!log.includes("# The question"), "the log does not contain the prompt");
-    const prompt = await readFile(join(dir, "prompt.md"), "utf8");
-    assert.match(prompt, /# The question\n\nWhy this change\?\n/);
-    assert.match(prompt, /# The instructions of the campaign\n[^]*Fix the package\.\n[^]*Write short sentences\.\n\n# The question/, "the ask has prompt.md of the campaign and style.md");
+    const amended = await ask("Amend the fix: add a line.");
+    assert.deepEqual([amended.run.status, amended.run.error, amended.run.checks_of, amended.run.checks.map((c) => c.status)], ["ok", null, null, ["pass"]], "the tip moved: the runner starts the checks");
+    assert.equal(amended.run.head, git(wt, "rev-parse", "HEAD"));
+    assert.notEqual(amended.run.head, first.head);
+    assert.match(await amended.read("log.txt"), /claude --continue: exit code 1; again without --continue, with the full prompt\n/);
+    const full = await amended.read("prompt.md");
+    assert.match(full, /^# The test campaign\n\nFix the package\.\n\nWrite short sentences\.\n\n# The task\n[^]*\n\n# The question\n[^]*\n\nAmend the fix: add a line\.\n$/, "no conversation: the full prompt, then the question");
   } finally {
     delete process.env["PATCHIX_TEST_NO_CONVERSATION"];
   }

@@ -102,9 +102,9 @@ export const SettingsSchema = z.object({
    * `--author` of `gh pr list`. `null`: the login of `gh api user`. See `forkOf` in the fleet package.
    */
   fork: z.string().regex(GITHUB_LOGIN).nullable().default(null),
-  /** The `claude` model of the runs and the asks. */
+  /** The `claude` model of the runs. */
   model: z.string().regex(/^\S+$/).default("claude-opus-5-5"),
-  /** The maximum number of runs and asks of one campaign that operate at the same time. */
+  /** The maximum number of runs of one campaign that operate at the same time. */
   concurrency: z.number().int().positive().default(2),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -152,8 +152,8 @@ export type CheckResult = z.infer<typeof CheckResultSchema>;
 
 /**
  * `state/<campaign>/tasks/<attr>/runs/<id>/run.yaml`: one try of the agent on one task, or one commit that the
- * `import` command got from a different checkout. A file that patchix wrote before this version can have a `kind`
- * key: zod removes it.
+ * `import` command got from a different checkout. `reply.md` of the run directory is the `stdout` of `claude`. A file
+ * that patchix wrote before this version can have a `kind` key: zod removes it.
  */
 export const RunSchema = z.object({
   id: z.string().regex(RUN_ID),
@@ -163,18 +163,27 @@ export const RunSchema = z.object({
    * value of a mark: the code uses the other fields of the run.
    */
   tags: z.array(z.string()).default([]),
+  /**
+   * The question of a person, also in `question.md` of the run directory. The server writes the question into
+   * `question.md` of the task directory, and the runner moves the file into the run directory. `null`: a run without
+   * a question. See `startRun` in the fleet package.
+   */
+  question: z.string().nullable().default(null),
   started: z.string(),
   finished: z.string().nullable(),
   /**
-   * `running`: the agent or the checks operate. `ok`: `claude` stopped with code 0, one or more commits, a clean
-   * worktree, a description and each check is `pass`. `unverified`: as `ok`, but one or more checks are `fail` and no
-   * check is `error`. The agent completed the work, but a check did not agree with its `pass` expression. A person
-   * examines the run and makes the decision. `wontfix`: the agent found no small fix for the task. `claude` stopped
-   * with code 0, the agent made no commit, the worktree is clean and `description.md` starts with the heading
-   * `## No small fix`. `failed`: patchix or the run did not complete, see `error`. For example, the run did not start,
-   * or `claude` stopped with an error or after the time limit. A check that is `error`, or changes without a commit in
-   * the worktree, also make the run `failed`. `stopped`: a person stopped the run. A `running` record without a live
-   * runner is read as `stopped` with the error "the process stopped". The file does not change.
+   * `running`: the agent or the checks operate. `ok`: `claude` stopped with code 0 and the branch has commits after
+   * the base. The worktree is clean, the run has a description and each check is `pass`. A run with a question can
+   * have no description, and it can use the checks of a previous run: see `checks_of`. `unverified`: the agent
+   * completed the work, but a person must examine it and make the decision. One or more checks are `fail` and no
+   * check is `error`. Or the work has a problem: no commit, changes without a commit in the worktree, or no
+   * description. `error` gives the problem, and the runner does not start the checks for it. `wontfix`: the agent
+   * found no small fix for the task. `claude` stopped with code 0, the agent made no commit, the worktree is clean and
+   * `description.md` starts with the heading `## No small fix`. `failed`: patchix or the run did not complete, see
+   * `error`. The run did not start, `claude` stopped with an error or after the time limit, or a check command stopped
+   * with an error. The work of the agent does not make a run `failed`. `stopped`: a person stopped the run. A
+   * `running` record without a live runner is read as `stopped` with the error "the process stopped". The file does
+   * not change.
    */
   status: z.enum(["running", "ok", "unverified", "wontfix", "failed", "stopped"]),
   model: z.string(),
@@ -189,35 +198,17 @@ export const RunSchema = z.object({
   head: z.string().nullable(),
   commits: z.number().int(),
   checks: z.array(CheckResultSchema),
+  /**
+   * A previous run of the task. Its checks apply to this run, and they give the status of this run. A run with a
+   * question can keep the tip of the branch. Then this field names the newest previous run with the checks of that
+   * tip, when there is one. The runner does not start the checks, and `checks` is empty. `null` for each other run.
+   */
+  checks_of: z.string().regex(RUN_ID).nullable().default(null),
   /** The number of memelint findings in `description.md`. */
   lint: z.number().int().nullable(),
   error: z.string().nullable(),
 });
 export type Run = z.infer<typeof RunSchema>;
-
-/**
- * `state/<campaign>/tasks/<attr>/asks/<id>/ask.yaml`: one question of a person to the agent, in the worktree of the task.
- * The server writes only `question.md`. The `ask` command writes `ask.yaml` when it starts, then `prompt.md` (the
- * prompt), `reply.md` (the reply), `log.txt` (the output of `claude`) and `diff.patch` (the changes of the worktree
- * after the reply). An ask directory with `question.md` and without `ask.yaml` is read as `running`: the command
- * starts. After 2 minutes, it is read as `failed`. The `pid` and the `stopped` status are as in `RunSchema`, with the
- * words `ask <campaign> <attr>`. A file that patchix wrote before this version can have a `by` key: zod removes it.
- */
-export const AskSchema = z.object({
-  id: z.string().regex(RUN_ID),
-  attr: z.string().regex(ATTR),
-  /** The question, also in `question.md`. */
-  question: z.string(),
-  started: z.string(),
-  finished: z.string().nullable(),
-  status: z.enum(["running", "ok", "failed", "stopped"]),
-  model: z.string(),
-  pid: z.number().int().nullable(),
-  /** The files that the agent changed in the worktree. */
-  files: z.array(z.string()),
-  error: z.string().nullable(),
-});
-export type Ask = z.infer<typeof AskSchema>;
 
 /**
  * `state/<campaign>/fleet.yaml`: the fleet process of the campaign. The fleet writes this file when it starts, and
@@ -285,8 +276,9 @@ export const TaskStateSchema = z.enum([
   /** No pull request, and the newest run is `ok`: a person can examine it and make the pull request. */
   "ready",
   /**
-   * No pull request, and the newest run is `unverified`: the agent made a fix, but a check did not agree with its
-   * `pass` expression. A person examines the check output and makes the decision. The person can make the pull request.
+   * No pull request, and the newest run is `unverified`: the agent completed the work. But a check did not agree with
+   * its `pass` expression, or the work has a problem. A person examines the run and makes the decision. The person can
+   * make the pull request.
    */
   "unverified",
   "running",

@@ -1,7 +1,5 @@
 /** The client of the server routes. The views get the client from `ClientProvider`, thus the stories can use a mock client. */
 import type {
-  Ask,
-  AskInput,
   CampaignSummary,
   CampaignView,
   DraftFromRun,
@@ -11,6 +9,7 @@ import type {
   JobsView,
   Label,
   PublishInput,
+  QuestionInput,
   RunCommits,
   Settings,
   SettingsView,
@@ -19,8 +18,7 @@ import type {
 } from "@patchix/common";
 
 /** The text files of a run that the page shows. `log.txt` stays in the run directory and in the zellij tab. */
-export type RunFile = "prompt" | "diff" | "description";
-export type AskFile = "reply" | "prompt" | "diff";
+export type RunFile = "prompt" | "reply" | "diff" | "description";
 /** A server event, or `reconnect` after the event stream stops and starts again. */
 export type Signal = ServerEvent | { type: "reconnect" };
 
@@ -54,11 +52,11 @@ export interface Client {
   jobs(c: string): Promise<JobsView>;
   /** Adds the tasks to the queue. The fleet starts their runs. */
   queueRuns(c: string, input: JobInput): Promise<JobsView>;
-  /** Removes the task from the queue, or stops its job when it is not in the queue. */
+  /** Removes the task and its question from the queue. When the task is not in the queue, it stops the job of the task. */
   stopJob(c: string, attr: string): Promise<JobsView>;
   clearQueue(c: string): Promise<JobsView>;
-  ask(c: string, attr: string, input: AskInput): Promise<Ask>;
-  askFile(c: string, attr: string, id: string, file: AskFile): Promise<string>;
+  /** Adds the task to the queue with a question for the next run. See `QuestionInput`. */
+  ask(c: string, attr: string, input: QuestionInput): Promise<JobsView>;
   saveDraft(c: string, attr: string, input: DraftInput): Promise<TaskDetail>;
   draftFromRun(c: string, attr: string, input: DraftFromRun): Promise<TaskDetail>;
   /** `input` shows that the person set the tick box: see `PublishInput`. */
@@ -136,8 +134,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     queueRuns: (c, input) => json("POST", `${campaign(c)}/jobs`, input),
     stopJob: (c, attr) => json("DELETE", `${campaign(c)}/jobs/${s(attr)}`),
     clearQueue: (c) => json("DELETE", `${campaign(c)}/queue`),
-    ask: (c, attr, input) => json("POST", `${task(c, attr)}/ask`, input),
-    askFile: (c, attr, id, file) => text(`${task(c, attr)}/asks/${s(id)}/${file}`),
+    ask: (c, attr, input) => json("POST", `${task(c, attr)}/question`, input),
     saveDraft: (c, attr, input) => json("PUT", `${task(c, attr)}/draft`, input),
     draftFromRun: (c, attr, input) => json("POST", `${task(c, attr)}/draft`, input),
     createPr: (c, attr, input) => json("POST", `${task(c, attr)}/pr`, input),

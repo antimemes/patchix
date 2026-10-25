@@ -32,6 +32,7 @@ import {
   runId,
   serial,
   stateDir,
+  takeQuestion,
   taskDir,
   writeFleet,
   writeRun,
@@ -64,8 +65,8 @@ function logger(ctx: Ctx, c: string, opts: FleetOptions): (line: string) => Prom
 
 /**
  * Starts the run of the task in a new tab and waits for its `run.yaml`. When the runner does not write a record in
- * `startMs`, the fleet writes a `failed` record with the model `model`. The fleet writes no other record of a run.
- * Then it removes the entry of the queue.
+ * `startMs`, the fleet writes a `failed` record with the model `model`. That record gets the question of the task. The
+ * fleet writes no other record of a run. Then it removes the entry of the queue.
  */
 async function startOne(ctx: Ctx, campaign: Campaign, model: string, attr: string, log: (line: string) => Promise<void>, startMs: number): Promise<void> {
   const c = campaign.name;
@@ -89,8 +90,9 @@ async function startOne(ctx: Ctx, campaign: Campaign, model: string, attr: strin
     await log(`${attr}: the run ${run.id} started`);
   } else if ((await record()) === null) {
     const id = await newId(join(taskDir(ctx, c, attr), "runs"));
+    const question = await takeQuestion(ctx, c, attr, id);
     const text = error === null ? "the run did not start" : `the run did not start: ${error}`;
-    await writeRun(ctx, c, { id, attr, tags: [], started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
+    await writeRun(ctx, c, { id, attr, tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: text });
     await log(`${attr}: ${text}; the fleet wrote the failed run ${id}`);
   }
   await dequeue(ctx, c, attr);

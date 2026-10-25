@@ -15,8 +15,9 @@
  * - `GET /api/campaigns/:c/tasks/:attr` gives `TaskDetail`. When the task has a draft, memelint examines `pr.md`
  *   for each request: see `TaskDetail.lint`.
  * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/log` gives the log of the run as text: the lines of the runner and
- *   the output of `claude`. `.../prompt` gives the prompt of the agent (`prompt.md`), `.../diff` the diff of the run,
- *   `.../description` the `description.md` of the agent, `.../checks/:name` the output of one check.
+ *   the output of `claude`. `.../reply` gives the reply of the agent: `reply.md`, the `stdout` of `claude`.
+ *   `.../prompt` gives the prompt of the agent (`prompt.md`), `.../diff` the diff of the run, `.../description` the
+ *   `description.md` of the agent, `.../checks/:name` the output of one check.
  * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/commits` gives `RunCommits`: the commits from the `base` of the run
  *   to a `head`, the newest first, from `git log <base>..<head>` in the repository of patchix. For the newest run of
  *   the task, the `head` is the tip of the branch of the task, as `TaskView.head`. Thus the list shows a change of the
@@ -27,18 +28,17 @@
  *   does not have the `base` or the `head`, it gives 404.
  * - `GET /api/campaigns/:c/labels` gives `Label[]`: the labels of the issue repository, from
  *   `gh label list --repo <repo> --limit 1000 --json name,color,description`. The server keeps the list for one hour.
- * - `GET /api/campaigns/:c/jobs` gives `JobsView`: the runs and asks that operate at this time in the zellij session,
- *   the queue and the state of the fleet. `POST` with a `JobInput` body adds each task to the queue, but not a task
- *   with a job. Then it starts the fleet of the campaign when no fleet operates, and gives `JobsView` with status 202.
- *   The fleet starts the runs of the queue: see `runFleet`. `DELETE /api/campaigns/:c/jobs/:attr` removes the task
- *   from the queue. When the task is not in the queue, it stops the job of the task. It gives `JobsView`, or 404 when
- *   the task has no entry and no job. `DELETE /api/campaigns/:c/queue` removes each entry of the queue and gives
- *   `JobsView`.
- * - `POST /api/campaigns/:c/tasks/:attr/ask` with an `AskInput` body writes the question and starts `claude` in the
- *   worktree of the task, and gives `Ask`. The server does not write `ask.yaml`: see `AskSchema`. An ask is a job.
- *   It gives 409 when the task has a job, or when the campaign has the `concurrency` of the settings as its number of
- *   jobs. The worktree is made when there is none. `GET .../asks/:id/reply` gives the reply as text,
- *   `.../asks/:id/prompt` the prompt (`prompt.md`), `.../asks/:id/log` the log, `.../asks/:id/diff` the diff.
+ * - `GET /api/campaigns/:c/jobs` gives `JobsView`: the runs that operate at this time in the zellij session, the queue
+ *   and the state of the fleet. `POST` with a `JobInput` body adds each task to the queue, but not a task with a job.
+ *   Then it starts the fleet of the campaign when no fleet operates, and gives `JobsView` with status 202. The fleet
+ *   starts the runs of the queue: see `runFleet`. `DELETE /api/campaigns/:c/jobs/:attr` removes the task from the
+ *   queue, with its question (see `dequeue`). When the task is not in the queue, it stops the job of the task. It
+ *   gives `JobsView`, or 404 when the task has no entry and no job. `DELETE /api/campaigns/:c/queue` removes each
+ *   entry of the queue and gives `JobsView`.
+ * - `POST /api/campaigns/:c/tasks/:attr/question` with a `QuestionInput` body writes the question into `question.md`
+ *   of the task directory and adds the task to the queue. Then it starts the fleet as `POST .../jobs` does, and gives
+ *   `JobsView` with status 202. The next run of the task gets the question: see `RunSchema.question`. A task with a
+ *   job or with an entry in the queue gives 409: the person asks again after the run.
  * - `PUT /api/campaigns/:c/tasks/:attr/draft` with a `DraftInput` body writes `pr.yaml` and `pr.md` and gives
  *   `TaskDetail`, with the findings of memelint on the new `pr.md` in `lint`. `POST .../draft` with a `DraftFromRun`
  *   body makes the draft from a run; it replaces the draft and keeps the pull request number. A new draft gets the
@@ -77,7 +77,7 @@
  * - `GET /api/events` is a stream of server-sent events. Each message is one `Event` as JSON, without an event name.
  */
 import { z } from "zod";
-import { AskSchema, ATTR, CampaignSchema, GIT_URL, Name, PrSchema, RUN_ID, RunSchema, SettingsSchema, TaskStateSchema, TaskViewSchema } from "./model.ts";
+import { ATTR, CampaignSchema, GIT_URL, Name, PrSchema, RUN_ID, RunSchema, SettingsSchema, TaskStateSchema, TaskViewSchema } from "./model.ts";
 
 export const ErrorSchema = z.object({ error: z.string() });
 export type ErrorBody = z.infer<typeof ErrorSchema>;
@@ -135,8 +135,11 @@ export type CommitProblems = z.infer<typeof CommitProblemsSchema>;
 export const TaskDetailSchema = z.object({
   campaign: CampaignSchema,
   task: TaskViewSchema,
-  /** The asks, the newest first. */
-  asks: z.array(AskSchema),
+  /**
+   * `question.md` of the task directory: the question of a person for the next run of the task. The run in the queue
+   * gets it. `null` when the task has no such question.
+   */
+  question: z.string().nullable(),
   /** `pr.md`, when the task has a draft. */
   draft: z.string().nullable(),
   /** The description with each mark replaced, as it goes to GitHub. */
@@ -172,10 +175,10 @@ export const JobInputSchema = z.object({
 });
 export type JobInput = z.infer<typeof JobInputSchema>;
 
+/** A run that operates. */
 export const JobStatusSchema = z.object({
   attr: z.string(),
-  kind: z.enum(["run", "ask"]),
-  /** The id of the run or the ask. */
+  /** The id of the run. */
   id: z.string().regex(RUN_ID),
   started: z.string(),
 });
@@ -183,7 +186,7 @@ export type JobStatus = z.infer<typeof JobStatusSchema>;
 
 /** The jobs, the queue and the fleet of a campaign. */
 export const JobsViewSchema = z.object({
-  /** The runs and asks that operate at this time. */
+  /** The runs that operate at this time. */
   jobs: z.array(JobStatusSchema),
   /** The attributes of `state/<campaign>/queue/`, the first entry first. The fleet starts their runs in this sequence. */
   queue: z.array(z.string()),
@@ -219,10 +222,10 @@ export const RunCommitsSchema = z.object({
 });
 export type RunCommits = z.infer<typeof RunCommitsSchema>;
 
-export const AskInputSchema = z.object({
+export const QuestionInputSchema = z.object({
   question: z.string().trim().min(1).max(4000),
 });
-export type AskInput = z.infer<typeof AskInputSchema>;
+export type QuestionInput = z.infer<typeof QuestionInputSchema>;
 
 export const DraftInputSchema = z.object({
   title: z.string().trim().min(1),

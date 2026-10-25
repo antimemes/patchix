@@ -1,7 +1,7 @@
 /**
  * The server-sent events. A watcher on `state/` makes the events. Thus a change from the page, from a runner or the
- * fleet in zellij, from a text editor or from `git` gets to each open page. A change of a `run.yaml`, an `ask.yaml`, a
- * `question.md`, the queue or `fleet.yaml` gives a `jobs` event.
+ * fleet in zellij, from a text editor or from `git` gets to each open page. A change of a `run.yaml`, the queue or
+ * `fleet.yaml` gives a `jobs` event.
  */
 import { mkdirSync, watch } from "node:fs";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ export function changeOf(path: string): { campaign: string; attr: string | null;
   const file = parts.at(-1) ?? "";
   if (!CAMPAIGN_NAME.test(campaign) || file.endsWith(".tmp") || (parts.length === 2 && file === "fleet.log")) return null;
   if (kind === "queue" || (parts.length === 2 && file === "fleet.yaml")) return { campaign, attr: null, view: false, job: true };
-  const job = file === "run.yaml" || file === "ask.yaml" || file === "question.md";
+  const job = file === "run.yaml";
   return { campaign, attr: kind === "tasks" && ATTR.test(attr) ? attr : null, view: true, job };
 }
 

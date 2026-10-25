@@ -1,8 +1,9 @@
 /**
  * One run of the agent on one task. A run makes the worktree, or uses the worktree that is there. Then it starts
  * `claude -p` and examines the result: the commits, the worktree, `description.md`, memelint and the checks.
- * The prompt goes into `prompt.md` of the run directory. `log.txt` gets the lines of the runner and the output of
- * `claude`. The worktree stays after the run. The runner writes its `pid` into `run.yaml` while the run operates.
+ * The prompt goes into `prompt.md` of the run directory, and the `stdout` of `claude` goes into `reply.md`. `log.txt`
+ * gets the lines of the runner and the output of `claude`. The worktree stays after the run. The runner writes its
+ * `pid` into `run.yaml` while the run operates.
  */
 import { createWriteStream, type WriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
@@ -12,8 +13,11 @@ import { checkCommand, runChecks } from "./checks.ts";
 import { claudeBin, runClaude, TOOLS } from "./claude.ts";
 import { addWorktree, baseTip, diff, isClean, revParse } from "./git.ts";
 import { lintText } from "./lint.ts";
-import { describe } from "./proc.ts";
-import { campaignDir, fail, listRuns, message, newId, now, readCampaign, readSettings, readTask, readText, runDir, taskDir, taskJob, writeRun, type Ctx } from "./store.ts";
+import { describe, type StartResult } from "./proc.ts";
+import { campaignDir, fail, listRuns, message, newId, now, readCampaign, readSettings, readTask, readText, runDir, takeQuestion, taskDir, taskJob, writeRun, type Ctx } from "./store.ts";
+
+/** When `claude --continue` stops with an error in this time, the worktree has no session of `claude`: the runner starts `claude` again with the full prompt. */
+const FAST_MS = 30_000;
 
 /** The lines of `words.txt`. */
 export function parseWords(text: string | null): string[] {
@@ -31,16 +35,20 @@ export function isNoFix(description: string): boolean {
   return /^## No small fix\b/.test(description.trimStart());
 }
 
-/** The instructions of the campaign: `prompt.md` of the campaign, then `campaigns/style.md`. The runs and the asks use them. */
-export async function campaignInstructions(ctx: Ctx, name: string): Promise<string> {
+/** The instructions of the campaign: `prompt.md` of the campaign, then `campaigns/style.md`. */
+async function campaignInstructions(ctx: Ctx, name: string): Promise<string> {
   const prompt = await readFile(join(campaignDir(ctx, name), "prompt.md"), "utf8");
   const style = (await readText(join(ctx.root, "campaigns", "style.md"))) ?? "";
   return [prompt.trimEnd(), style.trimEnd()].join("\n\n");
 }
 
-/** The prompt: the instructions of the campaign (see `campaignInstructions`) and the task block. `model` is the model of the run. */
-export async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, base: string, worktree: string, dir: string, model: string): Promise<string> {
-  const values = { attr: task.attr, base, after: "HEAD" };
+/**
+ * The prompt: the instructions of the campaign (see `campaignInstructions`) when `full` is set, then the task block.
+ * A run that continues the session of `claude` does not get the instructions again. A run with a question gets the
+ * question at the end, with its instructions. `run` gives the base, the model and the question.
+ */
+async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, run: Run, worktree: string, dir: string, full: boolean): Promise<string> {
+  const values = { attr: task.attr, base: run.base, after: "HEAD" };
   const entry = [task.pr === null ? null : `#${task.pr}`, task.remark].filter((x) => x !== null).join(" ");
   const block = [
     "# The task",
@@ -54,29 +62,40 @@ export async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, base
     `- Notes of the issue entry: ${task.notes || "(none)"}`,
     `- Pull request or remark of the issue entry: ${entry || "(none)"}`,
     `- Tracking issue: ${campaign.issue.repo}#${campaign.issue.number}`,
-    `- Base commit (the commit before the fix): \`${base}\``,
+    `- Base commit (the commit before the fix): \`${run.base}\``,
     `- Worktree (the current directory): \`${worktree}\``,
     `- Run directory, for \`description.md\` and \`words.txt\`: \`${dir}\``,
-    `- Model: \`${model}\``,
+    `- Model: \`${run.model}\``,
     "- Checks (start them in the worktree after the commit):",
     ...campaign.checks.map((c) => `  - \`${c.name}\`: \`${checkCommand(c.command, values)}\` (it passes when the output has a match of \`${checkCommand(c.pass, values)}\`)`),
   ];
-  return [await campaignInstructions(ctx, campaign.name), block.join("\n")].join("\n\n") + "\n";
+  const question = [
+    "# The question",
+    "",
+    "A person asks this question about the task. Reply to the question. Change the files of the worktree only when the question tells you to.",
+    "When you change the files, amend the commit. When your change makes the description wrong, write `description.md` of this run again, in full. If not, do not write it.",
+    "When the question asks you to examine the commit against the instructions, read `git show HEAD` and give each instruction that the commit does not obey, with the line.",
+    "",
+    run.question ?? "",
+  ];
+  const parts = [full ? await campaignInstructions(ctx, campaign.name) : null, block.join("\n"), run.question === null ? null : question.join("\n")];
+  return parts.filter((p) => p !== null).join("\n\n") + "\n";
 }
 
 /**
- * Does one run of the task with the model of the settings, and gives its last record. A task that has a job at this
- * time gets an error with status 409.
+ * Does one run of the task with the model of the settings, and gives its last record. The run gets the question of the
+ * task: see `takeQuestion`. A task that has a job at this time gets an error with status 409.
  */
 export async function startRun(ctx: Ctx, name: string, attr: string, signal?: AbortSignal): Promise<Run> {
   const campaign = await readCampaign(ctx, name);
   const { model } = await readSettings(ctx);
   const task = await readTask(ctx, name, attr);
   const job = await taskJob(ctx, name, attr);
-  if (job !== null) fail(409, `the task ${attr} has a ${job.kind} that operates: ${job.id}`);
+  if (job !== null) fail(409, `the task ${attr} has a run that operates: ${job.id}`);
   const id = await newId(join(taskDir(ctx, name, attr), "runs"));
   const dir = runDir(ctx, name, attr, id);
-  const run: Run = { id, attr, tags: [], started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
+  const question = await takeQuestion(ctx, name, attr, id);
+  const run: Run = { id, attr, tags: [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: null };
   await writeRun(ctx, name, run);
   const out = createWriteStream(join(dir, "log.txt"), { flags: "a" });
   out.on("error", () => undefined);
@@ -90,25 +109,42 @@ export async function startRun(ctx: Ctx, name: string, attr: string, signal?: Ab
 async function execute(ctx: Ctx, campaign: Campaign, task: Task, first: Run, dir: string, out: WriteStream, signal: AbortSignal | undefined): Promise<Run> {
   const log = (line: string) => out.write(`[patchix ${now()}] ${line}\n`);
   let run = first;
+  // The errors of patchix make the run `failed`. The problems of the work of the agent and a check that is `fail` make it `unverified`: a person examines the run. See `RunSchema`.
   const errors: string[] = [];
+  const problems: string[] = [];
   let wontfix = false;
-  // A check that is `fail` is not an error of patchix: the agent completed the work, and a person makes the decision. See `RunSchema`.
   let unverified = false;
   try {
+    const earlier = (await listRuns(ctx, campaign.name, task.attr)).filter((r) => r.id !== run.id);
     const wt = await addWorktree(ctx, campaign, task.attr);
     log(`worktree ${wt.path} on the branch ${wt.branch}`);
     // A branch that was there keeps the base of its newest run. An adopted branch has its parent commit: that is its base.
-    const previous = (await listRuns(ctx, campaign.name, task.attr)).find((r) => r.base !== "")?.base;
     const parent = await revParse(wt.path, "HEAD^");
-    const base = wt.base ?? previous ?? parent ?? (await baseTip(ctx, campaign));
+    const base = wt.base ?? earlier.find((r) => r.base !== "")?.base ?? parent ?? (await baseTip(ctx, campaign));
     run = { ...run, base };
     await writeRun(ctx, campaign.name, run);
 
-    const prompt = await buildPrompt(ctx, campaign, task, base, wt.path, dir, run.model);
-    await writeFile(join(dir, "prompt.md"), prompt);
-    log(`${claudeBin()} -p <prompt.md> --model ${run.model} --allowedTools ${TOOLS.join(" ")}`);
+    const once = async (cont: boolean): Promise<StartResult> => {
+      const prompt = await buildPrompt(ctx, campaign, task, run, wt.path, dir, !cont);
+      await writeFile(join(dir, "prompt.md"), prompt);
+      log(`${claudeBin()} -p <prompt.md>${cont ? " --continue" : ""} --model ${run.model} --allowedTools ${TOOLS.join(" ")}`);
+      const reply = createWriteStream(join(dir, "reply.md"));
+      reply.on("error", () => undefined);
+      try {
+        return await runClaude({ cwd: wt.path, prompt, model: run.model, dir, out, stdout: reply, timeoutMs: campaign.timeout_minutes * 60_000, signal, cont });
+      } finally {
+        await new Promise<void>((r) => reply.end(r));
+      }
+    };
     const start = await revParse(wt.path, "HEAD");
-    const result = await runClaude({ cwd: wt.path, prompt, model: run.model, dir, out, timeoutMs: campaign.timeout_minutes * 60_000, signal });
+    // A run with a question continues the newest session of `claude` in the worktree, when the branch was there before the run.
+    const resume = run.question !== null && wt.base === null && earlier.length > 0;
+    const began = Date.now();
+    let result = await once(resume);
+    if (resume && !result.stopped && result.code !== 0 && Date.now() - began < FAST_MS) {
+      log(`claude --continue: ${describe(result)}; again without --continue, with the full prompt`);
+      result = await once(false);
+    }
     log(`claude: ${describe(result)}`);
     const completed = !result.stopped && !result.timedOut && result.code === 0;
     if (!result.stopped && !completed) errors.push(`claude: ${describe(result)}`);
@@ -121,25 +157,36 @@ async function execute(ctx: Ctx, campaign: Campaign, task: Task, first: Run, dir
     wontfix = completed && tip === start && clean && description !== null && isNoFix(description);
     const head = tip !== null && tip !== base && !wontfix ? tip : null;
     run = { ...run, commits: head === null ? 0 : 1, head };
-    if (head === null && !wontfix) errors.push("no commit");
-    else if (head !== null) await writeFile(join(dir, "diff.patch"), await diff(wt.path, base, head));
-    if (!clean) errors.push("the worktree has changes without a commit");
-    if (description === null) errors.push("no description.md");
+    if (head !== null) await writeFile(join(dir, "diff.patch"), await diff(wt.path, base, head));
+    if (!clean) problems.push("the worktree has changes without a commit");
+    else if (head === null && !wontfix) problems.push("no commit");
+    // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
+    if (description === null && run.question === null) problems.push("no description.md");
 
+    // The checks examine the commit. With a problem of the work, there is no commit to examine, or the worktree has changes that the commit does not have.
     let checks: CheckResult[] = [];
-    if (errors.length === 0 && !wontfix && !signal?.aborted) {
-      await writeRun(ctx, campaign.name, run);
-      checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base }, signal, log });
-      for (const c of checks) if (c.status === "error") errors.push(`check ${c.name}: error`);
-      unverified = checks.some((c) => c.status === "fail");
+    if (errors.length === 0 && problems.length === 0 && !wontfix && !signal?.aborted) {
+      // A run with a question that did not move the tip uses the checks of a previous run of that tip. See `RunSchema.checks_of`.
+      const applied = run.question !== null && tip === start ? earlier.find((r) => r.checks.length > 0 && r.head === tip) : undefined;
+      if (applied === undefined) {
+        await writeRun(ctx, campaign.name, run);
+        checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base }, signal, log });
+      } else {
+        log(`the checks of the run ${applied.id} apply: the branch did not change`);
+        run = { ...run, checks_of: applied.id };
+      }
+      const results = applied?.checks ?? checks;
+      for (const c of results) if (c.status === "error") errors.push(`check ${c.name}: error`);
+      unverified = results.some((c) => c.status === "fail");
     }
     run = { ...run, checks };
   } catch (e) {
     errors.push(message(e));
     log(`error: ${message(e)}`);
   }
-  const status = signal?.aborted ? "stopped" : errors.length > 0 ? "failed" : wontfix ? "wontfix" : unverified ? "unverified" : "ok";
-  run = { ...run, status, finished: now(), pid: null, error: errors.length === 0 ? null : errors.join("; ") };
+  const status = signal?.aborted ? "stopped" : errors.length > 0 ? "failed" : wontfix ? "wontfix" : unverified || problems.length > 0 ? "unverified" : "ok";
+  const error = [...errors, ...problems].join("; ");
+  run = { ...run, status, finished: now(), pid: null, error: error === "" ? null : error };
   log(`run ${run.id}: ${status}${run.error === null ? "" : ` (${run.error})`}`);
   await writeRun(ctx, campaign.name, run);
   return run;
