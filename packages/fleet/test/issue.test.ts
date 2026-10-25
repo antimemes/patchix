@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
+import { context } from "../src/store.ts";
+import { extractTasks } from "../src/sync.ts";
+import brotliTasks from "../../../campaigns/brotli/tasks.ts";
 
 const BODY = `Part of #576475.
 - [x] **akkoma** — \`/lib/castore-1.0.17/priv/cacerts.pem\` (+1 more) — #576652 (beamPackages)
@@ -22,4 +26,45 @@ test("parseIssueTasks reads each entry", () => {
   assert.equal(tasks[4]?.pr, 576652);
   assert.equal(tasks[4]?.checked, true);
   assert.equal(tasks[5]?.attr, "python3Packages.wassima");
+});
+
+/** The format of NixOS/nixpkgs#578375. `campaigns/brotli/tasks.ts` reads it. */
+const BROTLI = `Evaluated against 1ee4ed5c on Linux x86_64.
+
+## Vendored C decoder
+
+### .NET runtime (vendors brotli 1.1.0)
+
+dotnet/runtime vendors brotli 1.1.0 in \`src/native/external/brotli\`.
+
+- [ ] \`crossmacro\` (\`lib/crossmacro/.CrossMacro.UI-wrapped\`)
+- [x] \`dotnetCorePackages.dotnet_10.vmr\` (\`…/native/singlefilehost\`) — #579001 update to 10.0.5
+- [ ] \`helion\` (\`lib/helion/Helion\`) https://github.com/NixOS/nixpkgs/pull/579002
+
+### DuckDB (vendors brotli 1.1.0)
+
+- [ ] \`duckdb\` (\`bin/duckdb\`, \`lib/libduckdb.so\`)
+
+## Other
+
+- [X] \`_7zip-zstd\` (\`lib/7zip/7z.so\`) — no change needed: see #579003
+- [ ] \`edk2\`
+`;
+
+test("the tasks.ts of the brotli campaign reads each entry, and the sync imports it", async () => {
+  const entry = { checked: false, pr: null, remark: null, in_issue: true, in_source: false, branch: null };
+  const dotnet = ".NET runtime (vendors brotli 1.1.0)";
+  const expected = [
+    { ...entry, attr: "crossmacro", paths: ["lib/crossmacro/.CrossMacro.UI-wrapped"], notes: dotnet },
+    { ...entry, attr: "dotnetCorePackages.dotnet_10.vmr", paths: ["…/native/singlefilehost"], notes: dotnet, checked: true, pr: 579001, remark: "update to 10.0.5" },
+    { ...entry, attr: "helion", paths: ["lib/helion/Helion"], notes: dotnet, pr: 579002 },
+    { ...entry, attr: "duckdb", paths: ["bin/duckdb", "lib/libduckdb.so"], notes: "DuckDB (vendors brotli 1.1.0)" },
+    { ...entry, attr: "_7zip-zstd", paths: ["lib/7zip/7z.so"], notes: "Other", checked: true, pr: 579003, remark: "no change needed: see #579003" },
+    { ...entry, attr: "edk2", paths: [], notes: "Other" },
+  ];
+  assert.deepEqual(brotliTasks(BROTLI), expected);
+  const warnings: string[] = [];
+  const root = resolve(import.meta.dirname, "..", "..", "..");
+  assert.deepEqual(await extractTasks(context({ root }), "brotli", BROTLI, warnings), expected);
+  assert.deepEqual(warnings, []);
 });

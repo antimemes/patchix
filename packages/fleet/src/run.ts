@@ -48,7 +48,7 @@ async function campaignInstructions(ctx: Ctx, name: string): Promise<string> {
  * question at the end, with its instructions. `run` gives the base, the model and the question.
  */
 async function buildPrompt(ctx: Ctx, campaign: Campaign, task: Task, run: Run, worktree: string, dir: string, full: boolean): Promise<string> {
-  const values = { attr: task.attr, base: run.base, after: "HEAD" };
+  const values = { attr: task.attr, base: run.base, after: "HEAD", root: ctx.root };
   const entry = [task.pr === null ? null : `#${task.pr}`, task.remark].filter((x) => x !== null).join(" ");
   const block = [
     "# The task",
@@ -170,7 +170,7 @@ async function execute(ctx: Ctx, campaign: Campaign, task: Task, first: Run, dir
       const applied = run.question !== null && tip === start ? earlier.find((r) => r.checks.length > 0 && r.head === tip) : undefined;
       if (applied === undefined) {
         await writeRun(ctx, campaign.name, run);
-        checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base }, signal, log });
+        checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base, root: ctx.root }, signal, log });
       } else {
         log(`the checks of the run ${applied.id} apply: the branch did not change`);
         run = { ...run, checks_of: applied.id };

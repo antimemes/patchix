@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { publishable, RunSchema, type Campaign, type CommitProblems, type Pr, type Run, type Task } from "@patchix/common";
 import { parseIssueTasks } from "../src/issue.ts";
-import { passRegex } from "../src/checks.ts";
+import { checkCommand, passRegex } from "../src/checks.ts";
 import { capture, CaptureError, childEnv, commandLine } from "../src/proc.ts";
 import { aiCoauthor, commitProblems, forkUrl, git, NO_ASSISTED, problemText, repoPath } from "../src/git.ts";
 import { forkOf } from "../src/github.ts";
@@ -257,9 +257,11 @@ test("tomlWords and withWords", () => {
 test("runId, parseWords and passRegex", () => {
   assert.equal(runId(new Date("2026-10-23T21:05:09.123Z")), "20261023-210509");
   assert.deepEqual(parseWords("JRE\n\n# comment\n JRE \nPEM\n"), ["JRE", "PEM"]);
-  const re = passRegex("^VERDICT {attr} emudhra: FIXED", { attr: "python3Packages.foo", base: "b", after: "a" });
+  const re = passRegex("^VERDICT {attr} emudhra: FIXED", { attr: "python3Packages.foo", base: "b", after: "a", root: "/r" });
   assert.ok(re.test("x\nVERDICT python3Packages.foo emudhra: FIXED\n"));
   assert.ok(!re.test("VERDICT python3PackagesXfoo emudhra: FIXED"));
+  const values = { attr: "lzbench", base: "b", after: "a", root: "/r" };
+  assert.equal(checkCommand("sh '{root}/campaigns/brotli/check.sh' {attr} {base}", values), "sh '/r/campaigns/brotli/check.sh' lzbench b");
 });
 
 test("the KDL layout of a tab", () => {
