@@ -1,0 +1,43 @@
+#:schema https://raw.githubusercontent.com/antimemes/memelint/main/crates/memelint/memelint.schema.json
+# The memelint configuration of the pull request descriptions of the `brotli` campaign. patchix starts
+# `memelint check --config campaigns/brotli/memelint.toml <file>` on each description.
+# memelint does not examine code blocks, HTML blocks (<details>, <!-- -->), inline code or URLs.
+#
+# The list below is the curated list of technical names. An agent gives more names in `words.txt` of its
+# run; a person moves the good names here.
+check = true
+profile = "strict"
+words = [
+  # names of tools, formats and specifications
+  "brotli-checker", "memelint", "nixpkgs", "patchix", "Nix", "Nix store", "NixOS",
+  "Claude Code", "Claude Fable", "Claude Opus",
+  "Simplified Technical English",
+  "GitHub", "Linux", "darwin", "Windows", "Python", "Java", "Rust", "Go", "cgo", "C", "C++", "glibc",
+  "CMake", "Meson", "SCons", "Bazel", "Cargo", "npm", "NuGet", "PyInstaller", "ELF",
+  "AI disclosure", "pull request description", "pull request",
+
+  # the CVE
+  "Brotli", "brotli", "decoder", "decoders", "encoder", "CVE-2026-111497", "CVE", "advisory", "security release",
+  "upstream", "backport", "vendored", "unvendor", "static link", "statically linked", "shared library",
+  "static library", "static libraries", "prebuilt", "update", "updates", "major version",
+  "block switch", "scanner", "symbol", "symbols", "Trail of Bits",
+
+  # products of the issue
+  ".NET", ".NET runtime", "runtime pack", "single-file host", "VMR", "DuckDB", "Godot", "export templates",
+  "Node.js", "Bun", "workerd", "Cloudflare", "ImageMagick", "Magick.NET", "Magick.Native", "TensorFlow", "JAX",
+  "CatBoost", "FreeType", "WOFF2", "JPEG XL", "libjxl", "EDK II",
+
+  # packages
+  "wheel", "gem", "shim", "sandbox", "derivation", "interpreter", "overlay", "dynamic loader", "merge conflict",
+  "label", "supersede", "supersedes", "operating system", "modification time", "fix", "small fix",
+
+  # units
+  "minute", "hour", "year",
+
+  # The constant text of the pull request template of nixpkgs. Do not use it in the paragraphs.
+  # memelint accepts an expression of more than one word only when all its words are together.
+  "Things done", "automation/AI policy", "Built on platform", "Basic functionality",
+  "Ran on this", "nixpkgs-review usage", "core functionality", "release notes",
+  "Package update", "major or breaking", "Module addition", "when adding",
+  "Module update", "change is significant",
+]

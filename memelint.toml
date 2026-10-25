@@ -35,6 +35,17 @@ words = [
   "live test", "numbers", "record", "the smallest", "second", "minute", "minutes", "hour", "hours",
 ]
 
+[scopes.brotli]
+# The words of the `brotli` campaign: its prompt and its campaign file. The descriptions have their own list.
+paths = ["campaigns/brotli/"]
+check = true
+words = [
+  "brotli", "Brotli", "decoder", "decoders", "advisory", "CVE", "scanner", "prebuilt", "static library",
+  "static libraries", "shared library", "runtime pack", "major version", "CMake", "Meson", "SCons", "Bazel", "npm",
+  "cgo", "Go", "NuGet", "PyInstaller", "ELF", "PE", "Mach-O", ".NET", "Node.js", "DuckDB", "Godot", "Bun",
+  "Cloudflare", "ImageMagick",
+]
+
 [scopes.code]
 paths = ["packages/"]
 check = true
