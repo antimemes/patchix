@@ -2,7 +2,7 @@
 import type {
   CampaignSummary,
   CampaignView,
-  DraftFromRun,
+  Commit,
   DraftInput,
   Event as ServerEvent,
   JobInput,
@@ -10,7 +10,6 @@ import type {
   Label,
   PublishInput,
   QuestionInput,
-  RunCommits,
   Settings,
   SettingsView,
   TaskDetail,
@@ -18,7 +17,7 @@ import type {
 } from "@patchix/common";
 
 /** The text files of a run that the page shows. `log.txt` stays in the run directory and in the zellij tab. */
-export type RunFile = "prompt" | "reply" | "diff" | "description";
+export type RunFile = "prompt" | "reply" | "description";
 /** A server event, or `reconnect` after the event stream stops and starts again. */
 export type Signal = ServerEvent | { type: "reconnect" };
 
@@ -47,7 +46,10 @@ export interface Client {
   labels(c: string): Promise<Label[]>;
   task(c: string, attr: string): Promise<TaskDetail>;
   runFile(c: string, attr: string, run: string, file: RunFile): Promise<string>;
-  commits(c: string, attr: string, run: string): Promise<RunCommits>;
+  /** The commits of the branch of the task, from its base to its tip. See `GET .../commits`. */
+  commits(c: string, attr: string): Promise<Commit[]>;
+  /** `git diff <base> <tip>` of the branch of the task, as text. */
+  diff(c: string, attr: string): Promise<string>;
   checkOutput(c: string, attr: string, run: string, check: string): Promise<string>;
   jobs(c: string): Promise<JobsView>;
   /** Adds the tasks to the queue. The fleet starts their runs. */
@@ -58,7 +60,8 @@ export interface Client {
   /** Adds the task to the queue with a question for the next run. See `QuestionInput`. */
   ask(c: string, attr: string, input: QuestionInput): Promise<JobsView>;
   saveDraft(c: string, attr: string, input: DraftInput): Promise<TaskDetail>;
-  draftFromRun(c: string, attr: string, input: DraftFromRun): Promise<TaskDetail>;
+  /** Makes the draft from the newest run with a description and from the tip of the branch. See `makeDraft` in the fleet package. */
+  makeDraft(c: string, attr: string): Promise<TaskDetail>;
   /** `input` shows that the person set the tick box: see `PublishInput`. */
   createPr(c: string, attr: string, input: PublishInput): Promise<TaskDetail>;
   /** `publish.log` of the task. While `createPr` operates, the file becomes longer. A task without the file gives an error with the status 404. */
@@ -128,7 +131,8 @@ export function httpClient(options: { base?: string } = {}): Client {
     labels: (c) => json("GET", `${campaign(c)}/labels`),
     task: (c, attr) => json("GET", task(c, attr)),
     runFile: (c, attr, run, file) => text(`${task(c, attr)}/runs/${s(run)}/${file}`),
-    commits: (c, attr, run) => json("GET", `${task(c, attr)}/runs/${s(run)}/commits`),
+    commits: (c, attr) => json("GET", `${task(c, attr)}/commits`),
+    diff: (c, attr) => text(`${task(c, attr)}/diff`),
     checkOutput: (c, attr, run, check) => text(`${task(c, attr)}/runs/${s(run)}/checks/${s(check)}`),
     jobs: (c) => json("GET", `${campaign(c)}/jobs`),
     queueRuns: (c, input) => json("POST", `${campaign(c)}/jobs`, input),
@@ -136,7 +140,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     clearQueue: (c) => json("DELETE", `${campaign(c)}/queue`),
     ask: (c, attr, input) => json("POST", `${task(c, attr)}/question`, input),
     saveDraft: (c, attr, input) => json("PUT", `${task(c, attr)}/draft`, input),
-    draftFromRun: (c, attr, input) => json("POST", `${task(c, attr)}/draft`, input),
+    makeDraft: (c, attr) => json("POST", `${task(c, attr)}/draft`),
     createPr: (c, attr, input) => json("POST", `${task(c, attr)}/pr`, input),
     publishLog: (c, attr) => text(`${task(c, attr)}/publish-log`),
     makeWorktree: (c, attr) => json("POST", `${task(c, attr)}/worktree`),

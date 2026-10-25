@@ -16,16 +16,14 @@
  *   for each request: see `TaskDetail.lint`.
  * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/log` gives the log of the run as text: the lines of the runner and
  *   the output of `claude`. `.../reply` gives the reply of the agent: `reply.md`, the `stdout` of `claude`.
- *   `.../prompt` gives the prompt of the agent (`prompt.md`), `.../diff` the diff of the run, `.../description` the
- *   `description.md` of the agent, `.../checks/:name` the output of one check.
- * - `GET /api/campaigns/:c/tasks/:attr/runs/:run/commits` gives `RunCommits`: the commits from the `base` of the run
- *   to a `head`, the newest first, from `git log <base>..<head>` in the repository of patchix. For the newest run of
- *   the task, the `head` is the tip of the branch of the task, as `TaskView.head`. Thus the list shows a change of the
- *   branch after the run, for example `git commit --amend` in the worktree. For the other runs and for a run that is
- *   `running`, the `head` is the `head` of the run. It is also the `head` of the run when the repository does not
- *   have the branch. Each commit has its full message (`git log -1 --format=%B <sha>`) and its patch
- *   (`git show --format= <sha>`), as `git show` gives them. Without a `head`, the list is empty. When the repository
- *   does not have the `base` or the `head`, it gives 404.
+ *   `.../prompt` gives the prompt of the agent (`prompt.md`), `.../description` the `description.md` of the agent,
+ *   `.../checks/:name` the output of one check.
+ * - `GET /api/campaigns/:c/tasks/:attr/commits` gives `Commit[]`: the commits of the branch of the task from its base
+ *   to its tip, the newest first. They come from `git log <base>..<tip>` in the repository of patchix. The base is the
+ *   `base` of the newest run with a base, and the tip is `TaskView.head`. Each commit has its full message and its
+ *   patch, as `git show` gives them. Without a base or a tip, the list is empty. `.../diff` gives
+ *   `git diff <base> <tip>` as text: the change that `POST .../pr` pushes. It does not have the changes of the worktree
+ *   without a commit: see `TaskDetail.clean`. See `branchState` in the fleet package.
  * - `GET /api/campaigns/:c/labels` gives `Label[]`: the labels of the issue repository, from
  *   `gh label list --repo <repo> --limit 1000 --json name,color,description`. The server keeps the list for one hour.
  * - `GET /api/campaigns/:c/jobs` gives `JobsView`: the runs that operate at this time in the zellij session, the queue
@@ -40,15 +38,17 @@
  *   `JobsView` with status 202. The next run of the task gets the question: see `RunSchema.question`. A task with a
  *   job or with an entry in the queue gives 409: the person asks again after the run.
  * - `PUT /api/campaigns/:c/tasks/:attr/draft` with a `DraftInput` body writes `pr.yaml` and `pr.md` and gives
- *   `TaskDetail`, with the findings of memelint on the new `pr.md` in `lint`. `POST .../draft` with a `DraftFromRun`
- *   body makes the draft from a run; it replaces the draft and keeps the pull request number. A new draft gets the
- *   `labels` of the campaign.
+ *   `TaskDetail`, with the findings of memelint on the new `pr.md` in `lint`. `POST .../draft` without a body
+ *   makes the draft from the newest run with a description and from the tip of the branch (see `makeDraft`). It
+ *   replaces the draft and keeps the labels and the pull request number. A new draft gets the `labels` of the
+ *   campaign. Without such a run, it gives 409.
  * - `POST /api/campaigns/:c/tasks/:attr/pr` with a `PublishInput` body pushes the branch, makes the pull request or
  *   writes its description again, sets the labels and gives `TaskDetail`. A different body or no body gives 409 with
  *   the error `CONFIRM_ERROR`. When the request has no error, `pr.yaml` gets the time of the request in
- *   `confirmed`. The newest run must be `ok` or `unverified` and the task must have no job: if not, it gives 409. It
- *   also gives 409 for a pull request that is `merged` or `closed`, and for a commit of the branch with a problem
- *   (see `TaskDetail.commit_problems`). A draft with a mark problem gives 409 too: the error text gives each problem
+ *   `confirmed`. The branch must have commits after its base, and the tip must have checks without an `error` (see
+ *   `tipRun` and `tipProblem`). The worktree must be clean (see `TaskDetail.clean`) and the task must have no job. If
+ *   not, it gives 409. It also gives 409 for a pull request that is `merged` or `closed`, and for a commit of the
+ *   branch with a problem (see `TaskDetail.commit_problems`). A draft with a mark problem gives 409 too: the error text gives each problem
  *   (see `TaskDetail.mark_problems`). memelint findings of the draft do not stop the request: the page shows
  *   them. After these conditions, each command (`git push`, `gh api` for the pull request and for the labels) and its
  *   `stdout` and `stderr` go into `publish.log` of the task. Each request writes the file again. The `TaskDetail`
@@ -160,13 +160,18 @@ export const TaskDetailSchema = z.object({
   /** `publish.log`: the commands of the newest `POST .../pr` and their output. `null` when the file is not there. */
   publish_log: z.string().nullable(),
   /**
-   * The commits from the `base` of the newest run to the tip of the branch that do not agree with the
-   * `automation/AI policy` of nixpkgs, the newest first. Each commit must have a line that agrees with
-   * `^Assisted-by: .+ \(.+\) with patchix$`. A line that agrees with `/^Co-authored-by:/i` must not name an AI,
-   * for example `/claude|copilot|gemini/i`. A line that names a person has no problem. An empty list when each
-   * commit agrees, or when the task has no run or no branch. With a commit in this list, `POST .../pr` gives 409.
+   * The commits of the branch (see `GET .../commits`) that do not agree with the `automation/AI policy` of nixpkgs, the
+   * newest first. Each commit must have a line that agrees with `^Assisted-by: .+ \(.+\) with patchix$`. A line that
+   * agrees with `/^Co-authored-by:/i` must not name an AI, for example `/claude|copilot|gemini/i`. A line that names a
+   * person has no problem. An empty list when each commit agrees, or when the task has no base or no branch. With a
+   * commit in this list, `POST .../pr` gives 409.
    */
   commit_problems: z.array(CommitProblemsSchema),
+  /**
+   * The worktree of the task has no change without a commit and no new file (`git status --porcelain`), or the task
+   * has no worktree. The branch does not have such changes, and `POST .../pr` gives 409 for them.
+   */
+  clean: z.boolean(),
 });
 export type TaskDetail = z.infer<typeof TaskDetailSchema>;
 
@@ -195,7 +200,7 @@ export const JobsViewSchema = z.object({
 });
 export type JobsView = z.infer<typeof JobsViewSchema>;
 
-/** One commit of a run, as `git show <sha>` gives it. */
+/** One commit of the branch of a task, as `git show <sha>` gives it. */
 export const CommitSchema = z.object({
   /** The full commit id. */
   sha: z.string(),
@@ -207,20 +212,6 @@ export const CommitSchema = z.object({
   patch: z.string(),
 });
 export type Commit = z.infer<typeof CommitSchema>;
-
-/** The commits of a run: see the route `GET .../runs/:run/commits`. */
-export const RunCommitsSchema = z.object({
-  /** The commits from the `base` of the run to `head`, the newest first. */
-  commits: z.array(CommitSchema),
-  /** The last commit of the range: the tip of the branch or the `head` of the run. `null` when there is no `head`. */
-  head: z.string().nullable(),
-  /**
-   * `true` when the tip of the branch is not the `head` of the run, or not its `base` for a run without a `head`. Then
-   * the branch changed after the run, and the list shows the branch.
-   */
-  moved: z.boolean(),
-});
-export type RunCommits = z.infer<typeof RunCommitsSchema>;
 
 export const QuestionInputSchema = z.object({
   question: z.string().trim().min(1).max(4000),
@@ -235,9 +226,6 @@ export const DraftInputSchema = z.object({
   words: z.array(z.string().trim().min(1)),
 });
 export type DraftInput = z.infer<typeof DraftInputSchema>;
-
-export const DraftFromRunSchema = z.object({ run: z.string().regex(RUN_ID) });
-export type DraftFromRun = z.infer<typeof DraftFromRunSchema>;
 
 /**
  * The body of `POST .../tasks/:attr/pr`. The person sets the tick box of the page: with it, the person agrees with the

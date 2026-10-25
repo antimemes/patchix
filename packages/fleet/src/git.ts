@@ -12,10 +12,10 @@
  */
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Campaign, Commit, CommitProblems, RunCommits, Task } from "@patchix/common";
+import { tipRun, type Campaign, type Commit, type CommitProblems, type Run, type Task } from "@patchix/common";
 import { forkOf } from "./github.ts";
 import { capture, type CaptureOptions, type Log } from "./proc.ts";
-import { exists, fail, listRuns, readCampaign, readRun, readTasks, type Ctx } from "./store.ts";
+import { exists, fail, listRuns, readTasks, type Ctx } from "./store.ts";
 
 const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote"]);
 const REFUSED = /^--(depth|deepen|unshallow)/;
@@ -208,49 +208,66 @@ export async function subject(cwd: string, ref: string): Promise<string> {
   return (await git(cwd, ["log", "-1", "--format=%s", ref])).trim();
 }
 
-/**
- * The commits of `to` that `from` does not have, the newest first. Each commit has its full message and its patch,
- * as `git show` gives them.
- */
-export async function commitList(cwd: string, from: string, to: string): Promise<Commit[]> {
-  const out = await git(cwd, ["log", "--format=%H%x09%s", "--end-of-options", `${from}..${to}`]);
-  const lines = out.split("\n").filter((line) => line !== "");
-  return Promise.all(
-    lines.map(async (line) => {
-      const tab = line.indexOf("\t");
-      const sha = line.slice(0, tab);
-      const message = (await git(cwd, ["log", "-1", "--format=%B", sha])).trimEnd();
-      const patch = await git(cwd, ["show", "--format=", "--no-color", "--no-ext-diff", sha]);
-      return { sha, subject: line.slice(tab + 1), message, patch };
-    }),
-  );
+/** A commit of `messages`: a `Commit` without its patch. */
+export type Message = Omit<Commit, "patch">;
+
+/** The commits of `to` that `from` does not have, the newest first, with the full message. It uses one `git log`. */
+export async function messages(cwd: string, from: string, to: string): Promise<Message[]> {
+  // With `-z`, a NUL byte also follows each commit: thus the output is a list of fields, three for each commit.
+  const fields = (await git(cwd, ["log", "-z", "--format=%H%x00%s%x00%B", "--end-of-options", `${from}..${to}`])).split("\0");
+  const out: Message[] = [];
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const [sha = "", subject = "", message = ""] = fields.slice(i, i + 3);
+    out.push({ sha, subject, message: message.trimEnd() });
+  }
+  return out;
+}
+
+/** The commit of the branch of the task, or `null` when the repository or the branch is not there. */
+export async function branchTip(ctx: Ctx, campaign: Campaign, attr: string): Promise<string | null> {
+  const repo = repoPath(ctx);
+  return (await exists(join(repo, "HEAD"))) ? revParse(repo, `refs/heads/${await taskBranch(ctx, campaign, attr)}`) : null;
+}
+
+/** The branch of a task: see `branchState`. */
+export interface BranchState {
+  /** The commit before the fix: the `base` of the newest run with a base (see `startRun`). `null` when no run has one. */
+  base: string | null;
+  /** The commit of the branch: see `branchTip`. */
+  tip: string | null;
+  /** The commits from `base` to `tip`, the newest first. Empty without a base or a tip. */
+  commits: Message[];
+  /** The newest run with the checks of the tip: see `tipRun`. */
+  tipRun: Run | undefined;
 }
 
 /**
- * The commits of a run in the bare repository, from its base to a head. See `RunCommitsSchema`. For the newest run of
- * the task, the head is the tip of the branch of the task. A person can change the branch after the run. For the other
- * runs and for a run that operates, the head is the head of the run. It is also the head of the run when the
- * repository does not have the branch. Without a head, the list is empty. A commit that the repository does not have
- * gives an error.
+ * The branch of a task in the repository of patchix, with its base, its commits and the run with the checks of its
+ * tip. The pull request reads the branch, not a run: a person can change the branch after a run.
  */
-export async function runCommits(ctx: Ctx, c: string, attr: string, id: string): Promise<RunCommits> {
-  const run = await readRun(ctx, c, attr, id);
-  const repo = repoPath(ctx);
-  const repoThere = await exists(join(repo, "HEAD"));
-  const newest = (await listRuns(ctx, c, attr))[0];
-  // The agent of a run that operates changes the branch. A run without a base stopped before it made the worktree.
-  const fromBranch = repoThere && newest?.id === id && newest.status !== "running" && run.base !== "";
-  const tip = fromBranch ? await revParse(repo, `refs/heads/${await taskBranch(ctx, await readCampaign(ctx, c), attr)}`) : null;
-  const head = tip ?? run.head;
-  if (head === null) return { commits: [], head: null, moved: false };
-  for (const sha of [run.base, head]) {
-    if (!repoThere || (await revParse(repo, sha)) === null) fail(404, `the repository of patchix does not have the commit ${sha} of the run ${id}`);
-  }
-  return { commits: await commitList(repo, run.base, head), head, moved: head !== (run.head ?? run.base) };
+export async function branchState(ctx: Ctx, campaign: Campaign, attr: string): Promise<BranchState> {
+  const runs = await listRuns(ctx, campaign.name, attr);
+  const base = runs.find((r) => r.base !== "")?.base ?? null;
+  const tip = await branchTip(ctx, campaign, attr);
+  // A repository that a person made again does not have the base of a previous branch.
+  const commits = base === null || tip === null || (await revParse(repoPath(ctx), base)) === null ? [] : await messages(repoPath(ctx), base, tip);
+  return { base, tip, commits, tipRun: tipRun(runs, tip) };
+}
+
+/** The commits of the branch of a task, each with its patch as `git show` gives it. See `branchState`. */
+export async function branchCommits(ctx: Ctx, campaign: Campaign, attr: string): Promise<Commit[]> {
+  const { commits } = await branchState(ctx, campaign, attr);
+  return Promise.all(commits.map(async (c) => ({ ...c, patch: await git(repoPath(ctx), ["show", "--format=", "--no-color", "--no-ext-diff", c.sha]) })));
+}
+
+/** `git diff <base> <tip>` of the branch of a task: the change of its pull request. Empty without commits. */
+export async function branchDiff(ctx: Ctx, campaign: Campaign, attr: string): Promise<string> {
+  const { base, tip, commits } = await branchState(ctx, campaign, attr);
+  return base === null || tip === null || commits.length === 0 ? "" : diff(repoPath(ctx), base, tip);
 }
 
 /** The line of the `automation/AI policy` of nixpkgs: `Assisted-by: <tool> (<model>) with patchix`. */
-const ASSISTED = /^Assisted-by: .+ \(.+\) with patchix$/m;
+const ASSISTED = /^Assisted-by: .+ \((.+)\) with patchix$/gm;
 const COAUTHORED = /^Co-authored-by:/i;
 /** The names of an AI in the value of a `Co-authored-by` line. A line that names a person has no problem. */
 const AI = /claude|anthropic|copilot|gpt|openai|gemini|noreply@anthropic\.com/i;
@@ -258,26 +275,20 @@ export const NO_ASSISTED = "no `Assisted-by: <tool> (<model>) with patchix` line
 export const aiCoauthor = (line: string) => `a \`Co-authored-by\` line names an AI: ${line}`;
 
 /**
- * Examines the message of each commit from `base` to `tip` in the repository of patchix, the newest first. Each
- * commit must have an `Assisted-by: <tool> (<model>) with patchix` line. A line that agrees with
- * `/^Co-authored-by:/i` must not name an AI (see `AI`). Gives only the commits with a problem. When `tip` is `null`, the tip is the branch of the
- * task (see `taskBranch`). Without the repository or the branch, the list is empty.
+ * The commits with a problem. Each commit must have an `Assisted-by: <tool> (<model>) with patchix` line. A line that
+ * agrees with `/^Co-authored-by:/i` must not name an AI (see `AI`).
  */
-export async function commitProblems(ctx: Ctx, campaign: Campaign, attr: string, base: string, tip: string | null): Promise<CommitProblems[]> {
-  const repo = repoPath(ctx);
-  if (!(await exists(join(repo, "HEAD")))) return [];
-  const head = tip ?? (await revParse(repo, `refs/heads/${await taskBranch(ctx, campaign, attr)}`));
-  if (head === null) return [];
-  // With `-z`, a NUL byte also follows each commit: thus the output is a list of fields, three for each commit.
-  const fields = (await git(repo, ["log", "-z", "--format=%H%x00%s%x00%B", "--end-of-options", `${base}..${head}`])).split("\0");
-  const out: CommitProblems[] = [];
-  for (let i = 0; i + 2 < fields.length; i += 3) {
-    const [sha = "", subject = "", message = ""] = fields.slice(i, i + 3);
+export function commitProblems(commits: readonly Message[]): CommitProblems[] {
+  return commits.flatMap(({ sha, subject, message }) => {
     const ai = message.split("\n").filter((line) => COAUTHORED.test(line) && AI.test(line.slice("Co-authored-by:".length)));
-    const problems = [...(ASSISTED.test(message) ? [] : [NO_ASSISTED]), ...ai.map((line) => aiCoauthor(line.trimEnd()))];
-    if (problems.length > 0) out.push({ sha, subject, problems });
-  }
-  return out;
+    const problems = [...(message.match(ASSISTED) === null ? [NO_ASSISTED] : []), ...ai.map((line) => aiCoauthor(line.trimEnd()))];
+    return problems.length > 0 ? [{ sha, subject, problems }] : [];
+  });
+}
+
+/** The models of the `Assisted-by` lines of the commits, for the AI disclosure. */
+export function assistedModels(commits: readonly Message[]): string[] {
+  return [...new Set(commits.flatMap((c) => [...c.message.matchAll(ASSISTED)].map((m) => m[1] ?? "")))];
 }
 
 /** The text of one commit of `commitProblems`: `commit <short sha>: <problems>`. */

@@ -5,11 +5,11 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { publishable, RunSchema, type Campaign, type CommitProblems, type Pr, type Run, type Task } from "@patchix/common";
+import { tipProblem, tipRun, type Campaign, type CheckResult, type CommitProblems, type Pr, type Run, type Task } from "@patchix/common";
 import { parseIssueTasks } from "../src/issue.ts";
 import { checkCommand, passRegex } from "../src/checks.ts";
 import { capture, CaptureError, childEnv, commandLine } from "../src/proc.ts";
-import { aiCoauthor, commitProblems, forkUrl, git, NO_ASSISTED, problemText, repoPath } from "../src/git.ts";
+import { aiCoauthor, assistedModels, branchState, commitProblems, forkUrl, git, messages, NO_ASSISTED, problemText, repoPath } from "../src/git.ts";
 import { forkOf } from "../src/github.ts";
 import { parseLint, withWords } from "../src/lint.ts";
 import { refreshPrs, renderDraft } from "../src/pr.ts";
@@ -47,38 +47,56 @@ import { mergeTasks, parseSource } from "../src/sync.ts";
 import { cliLayout, kdlString, launch } from "../src/zellij.ts";
 
 const task: Task = { attr: "foo", paths: [], notes: "", checked: false, pr: null, remark: null, in_issue: true, in_source: false, branch: null };
-const run = (status: Run["status"], id = "20260101-000000", pid: number | null = null): Run => ({ id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "m", pid, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: null });
-const pr = (number: number | null, state: Pr["state"] = "open"): Pr => ({ title: "t", labels: [], run: "20260101-000000", words: [], number, url: null, created: null, pushed: null, updated: null, state, merged: null, confirmed: null });
+const run = (status: Run["status"], id = "20260101-000000", pid: number | null = null): Run => ({ id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "m", pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null });
+const pr = (number: number | null, state: Pr["state"] = "open"): Pr => ({ title: "t", labels: [], words: [], number, url: null, created: null, pushed: null, updated: null, state, merged: null, confirmed: null });
+/** The tip of the branch in the tests of `tipRun` and `taskState`. */
+const TIP = "a1";
+/** A run with the head `head` and one check with the status `check`. */
+const checked = (status: Run["status"], check: CheckResult["status"] = "pass", id = "20260101-000000", head = TIP): Run => ({ ...run(status, id), head, checks: [{ name: "harness", status: check, code: 0, seconds: 1 }] });
 
-test("publishable", () => {
-  assert.deepEqual(
-    RunSchema.shape.status.options.map((s) => [s, publishable(run(s))]),
-    [["running", false], ["ok", true], ["unverified", true], ["wontfix", false], ["failed", false], ["stopped", false]],
-  );
-  assert.equal(publishable(undefined), false);
+test("tipRun gives the newest run with the checks of the tip, and tipProblem gives its problem", () => {
+  const older = checked("ok", "pass", "20260101-000001");
+  const newer = checked("unverified", "fail", "20260101-000002");
+  const question = { ...run("ok", "20260101-000003"), head: TIP, question: "Why?" };
+  const other = checked("ok", "pass", "20260101-000004", "b2");
+  const runs = [other, question, newer, older];
+  assert.equal(tipRun(runs, TIP), newer, "the newest run with the head of the tip and with checks");
+  assert.equal(tipRun(runs, "b2"), other);
+  assert.equal(tipRun(runs, "c3"), undefined, "a commit by hand: no run has the checks of the tip");
+  assert.equal(tipRun(runs, null), undefined, "no branch");
+  assert.equal(tipRun([checked("stopped", "pass", "20260101-000005"), older], TIP), older, "a stopped run can have a part of the checks only");
+  assert.equal(tipProblem(undefined), "the tip of the branch has no checks");
+  assert.equal(tipProblem(newer), null, "a check that is fail: the person makes the decision");
+  assert.equal(tipProblem(checked("failed", "error")), "a check of the tip stopped with an error: harness");
 });
 
 test("taskState", () => {
-  assert.equal(taskState(task, [], null), "todo");
-  assert.equal(taskState(task, [run("running"), run("ok")], null), "running");
-  assert.equal(taskState(task, [run("ok"), run("failed")], null), "ready");
-  assert.equal(taskState(task, [run("failed")], pr(null)), "failed");
-  assert.equal(taskState(task, [run("stopped")], null), "failed");
-  assert.equal(taskState(task, [run("wontfix"), run("failed")], null), "wontfix", "the agent found no small fix");
-  assert.equal(taskState(task, [run("ok"), run("wontfix")], null), "ready");
-  assert.equal(taskState(task, [run("unverified"), run("ok")], null), "unverified", "a check did not pass: a person decides");
-  assert.equal(taskState(task, [run("failed"), run("unverified")], null), "failed");
-  assert.equal(taskState(task, [run("unverified")], pr(7)), "pr");
-  assert.equal(taskState(task, [run("wontfix")], pr(7)), "pr");
-  assert.equal(taskState(task, [run("ok")], pr(7)), "pr");
-  assert.equal(taskState(task, [run("running")], pr(7)), "pr", "the pull request has priority");
-  assert.equal(taskState({ ...task, pr: 9 }, [run("ok")], null), "external");
-  assert.equal(taskState({ ...task, checked: true }, [], null), "external");
-  assert.equal(taskState({ ...task, pr: 9 }, [], pr(9)), "pr");
-  assert.equal(taskState({ ...task, checked: true }, [], pr(9)), "pr", "the tick box does not hide an open pull request");
-  assert.equal(taskState({ ...task, checked: true }, [], pr(9, "merged")), "merged");
-  assert.equal(taskState({ ...task, checked: true }, [run("ok")], pr(9, "closed")), "closed");
-  assert.equal(taskState({ ...task, checked: true }, [run("ok")], pr(null)), "ready", "patchix has a draft: the task is not done elsewhere");
+  const ok = checked("ok");
+  assert.equal(taskState(task, [], null, null), "todo");
+  assert.equal(taskState(task, [run("running"), ok], null, TIP), "running");
+  assert.equal(taskState(task, [ok, run("failed")], null, TIP), "ready");
+  assert.equal(taskState(task, [ok], null, "b2"), "unverified", "a commit by hand: the tip has no checks");
+  assert.equal(taskState(task, [ok], null, null), "unverified", "no branch");
+  assert.equal(taskState(task, [{ ...run("ok"), head: TIP, question: "Why?" }, ok], null, TIP), "ready", "the checks of an earlier run of the tip");
+  assert.equal(taskState(task, [{ ...run("ok"), head: TIP, question: "Why?" }, checked("failed", "error")], null, TIP), "failed", "a check of the tip stopped with an error");
+  assert.equal(taskState(task, [{ ...run("unverified"), head: TIP, error: "the worktree has changes without a commit" }, ok], null, TIP), "ready", "the branch does not have these changes");
+  assert.equal(taskState(task, [run("failed")], pr(null), TIP), "failed");
+  assert.equal(taskState(task, [run("stopped"), ok], null, TIP), "failed");
+  assert.equal(taskState(task, [run("wontfix"), run("failed")], null, null), "wontfix", "the agent found no small fix");
+  assert.equal(taskState(task, [ok, run("wontfix")], null, TIP), "ready");
+  assert.equal(taskState(task, [checked("unverified", "fail"), ok], null, TIP), "unverified", "a check did not pass: a person decides");
+  assert.equal(taskState(task, [run("failed"), checked("unverified", "fail")], null, TIP), "failed");
+  assert.equal(taskState(task, [run("unverified")], pr(7), TIP), "pr");
+  assert.equal(taskState(task, [run("wontfix")], pr(7), TIP), "pr");
+  assert.equal(taskState(task, [ok], pr(7), TIP), "pr");
+  assert.equal(taskState(task, [run("running")], pr(7), TIP), "pr", "the pull request has priority");
+  assert.equal(taskState({ ...task, pr: 9 }, [ok], null, TIP), "external");
+  assert.equal(taskState({ ...task, checked: true }, [], null, null), "external");
+  assert.equal(taskState({ ...task, pr: 9 }, [], pr(9), null), "pr");
+  assert.equal(taskState({ ...task, checked: true }, [], pr(9), null), "pr", "the tick box does not hide an open pull request");
+  assert.equal(taskState({ ...task, checked: true }, [], pr(9, "merged"), null), "merged");
+  assert.equal(taskState({ ...task, checked: true }, [ok], pr(9, "closed"), TIP), "closed");
+  assert.equal(taskState({ ...task, checked: true }, [ok], pr(null), TIP), "ready", "patchix has a draft: the task is not done elsewhere");
 });
 
 test("git refuses the commands that can deepen the checkout", async () => {
@@ -106,10 +124,11 @@ test("commitProblems examines the Assisted-by line, and the Co-authored-by lines
     execFileSync("git", ["init", "-q", "-b", "t/foo", work]);
     g("commit", "-q", "--allow-empty", "-m", "base");
     const base = g("rev-parse", "HEAD");
-    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, null), [], "no repository");
+    await writeRun(ctx, "t", { ...run("ok", "20260101-000001"), base });
+    assert.deepEqual(await branchState(ctx, campaign, "foo"), { base, tip: null, commits: [], tipRun: undefined }, "no repository");
     const good = "Assisted-by: Claude Code (Claude Opus 5.5) with patchix";
     // For each commit: the first line of the message, the other lines and the problems.
-    const messages: [string, string[], string[]][] = [
+    const cases: [string, string[], string[]][] = [
       ["good", ["The body.", good], []],
       ["missing", ["The body."], [NO_ASSISTED]],
       ["without patchix", ["Assisted-by: Claude Code (Claude Opus 5.5)"], [NO_ASSISTED]],
@@ -124,16 +143,20 @@ test("commitProblems examines the Assisted-by line, and the Co-authored-by lines
       ["lower case", [good, "co-authored-by: A <a@example.com>", "co-authored-by: GPT-5 <bot@openai.com>"], [aiCoauthor("co-authored-by: GPT-5 <bot@openai.com>")]],
     ];
     const expected: CommitProblems[] = [];
-    for (const [subject, lines, problems] of messages) {
+    for (const [subject, lines, problems] of cases) {
       g("commit", "-q", "--allow-empty", "-m", subject, ...lines.flatMap((l) => ["-m", l]));
       if (problems.length > 0) expected.unshift({ sha: g("rev-parse", "HEAD"), subject, problems });
     }
     execFileSync("git", ["clone", "-q", "--bare", work, repoPath(ctx)]);
     const tip = g("rev-parse", "HEAD");
-    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, tip), expected, "only the commits with a problem, the newest first");
-    assert.deepEqual(await commitProblems(ctx, campaign, "foo", base, null), expected, "the tip of the branch of the task");
-    assert.deepEqual(await commitProblems(ctx, campaign, "bar", base, null), [], "no branch");
-    assert.deepEqual(await commitProblems(ctx, campaign, "foo", tip, tip), [], "no commit");
+    const commits = await messages(repoPath(ctx), base, tip);
+    assert.deepEqual(commitProblems(commits), expected, "only the commits with a problem, the newest first");
+    assert.deepEqual(assistedModels(commits), ["Claude Opus 5.5"], "the models of the Assisted-by lines");
+    assert.deepEqual(await messages(repoPath(ctx), tip, tip), [], "no commit");
+    // A run that did not start has no base: the base of the branch is the base of the newest run with a base.
+    await writeRun(ctx, "t", run("failed", "20260101-000002"));
+    assert.deepEqual(await branchState(ctx, campaign, "foo"), { base, tip, commits, tipRun: undefined }, "the branch of the task, and no run of the tip");
+    assert.deepEqual((await branchState(ctx, campaign, "bar")).tip, null, "no branch");
     const both = expected.find((p) => p.subject === "both");
     assert.equal(both && problemText(both), `commit ${both?.sha.slice(0, 12)}: ${NO_ASSISTED}, ${aiCoauthor("Co-Authored-By: Claude <noreply@anthropic.com>")}`);
   } finally {
@@ -414,22 +437,23 @@ test("the question of a person waits in the task directory until a run takes it,
   }
 });
 
-test("the files of an older version load: the kind of a run, and the review and the confirmation of a draft", async () => {
+test("the files of an older version load: the kind and the checks_of of a run, and the review, the run and the confirmation of a draft", async () => {
   const root = await mkdtemp(join(tmpdir(), "patchix-old-"));
   const ctx: Ctx = { root, data: root, github: "file:///nonexistent" };
   try {
     const id = "20260101-000000";
     const run = ["id: 20260101-000000", "attr: foo", "kind: import", "started: 2026-01-01T00:00:00Z", "finished: 2026-01-01T00:00:00Z", "status: ok"];
-    run.push("model: m", "pid: null", "base: a", "head: b", "commits: 1", "checks: []", "lint: null", "error: null");
+    run.push("model: m", "pid: null", "base: a", "head: b", "commits: 1", "checks: []", "checks_of: 20251231-000000", "lint: null", "error: null");
     await mkdir(runDir(ctx, "t", "foo", id), { recursive: true });
     await writeFile(join(runDir(ctx, "t", "foo", id), "run.yaml"), `${run.join("\n")}\n`);
+    await writeFile(join(runDir(ctx, "t", "foo", id), "diff.patch"), "an old diff\n");
     const [loaded] = await listRuns(ctx, "t", "foo");
-    assert.deepEqual([loaded?.tags, loaded?.status, "kind" in (loaded ?? {}), loaded?.question, loaded?.checks_of], [[], "ok", false, null, null]);
+    assert.deepEqual([loaded?.tags, loaded?.status, "kind" in (loaded ?? {}), loaded?.question, "checks_of" in (loaded ?? {})], [[], "ok", false, null, false]);
 
     const review = "review:\n  by: someone\n  at: 2026-01-01T00:00:00Z\n  examined: [diff]\n  note: I read the diff.\n";
     await writeFile(join(root, "state", "t", "tasks", "foo", "pr.yaml"), `title: t\nlabels: []\nrun: ${id}\nwords: []\n${review}number: null\nurl: null\ncreated: null\npushed: null\nupdated: null\n`);
     const pr = await readPr(ctx, "t", "foo");
-    assert.deepEqual([pr?.title, pr?.state, pr?.confirmed, "review" in (pr ?? {})], ["t", "open", null, false]);
+    assert.deepEqual([pr?.title, pr?.state, pr?.confirmed, "review" in (pr ?? {}), "run" in (pr ?? {})], ["t", "open", null, false, false]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -475,7 +499,8 @@ test("refreshPrs writes the state of the pull requests of the fork into the draf
     assert.deepEqual(await fields("baz"), [9, "open", null, null], "a number that is not in the list does not change");
     assert.deepEqual(await fields("sh.a"), [12, "closed", null, "u12"], "the newest pull request of the branch of the task");
     assert.equal(await readPr(ctx, "t", "qux"), null, "a task without a draft gets no draft");
-    assert.deepEqual((await taskViews(ctx, "t")).map((v) => [v.attr, v.state]), [["foo", "merged"], ["bar", "pr"], ["baz", "pr"], ["qux", "ready"], ["sh.a", "closed"]]);
+    // The root has no repository: the run of `qux` is not the run of a tip.
+    assert.deepEqual((await taskViews(ctx, "t")).map((v) => [v.attr, v.state]), [["foo", "merged"], ["bar", "pr"], ["baz", "pr"], ["qux", "unverified"], ["sh.a", "closed"]]);
     assert.deepEqual(await refreshPrs(ctx, campaign), [], "a second refresh changes nothing");
     assert.deepEqual(await refreshPrs(ctx, campaign, []), [], "a given list: no gh");
     assert.equal((await readFile(calls, "utf8")).trim().split("\n").length, 2);
@@ -499,7 +524,9 @@ test("renderDraft hides the local directories in the output of a check", async (
     await mkdir(join(file, ".."), { recursive: true });
     await writeFile(file, output);
 
-    const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
+    // The run has the checks of the tip of the branch: see `branchState`.
+    const tipRun = { ...run("ok"), head: "h", checks: [{ name: "harness", status: "pass" as const, code: 0, seconds: 1 }] };
+    const rendered = (await renderDraft(ctx, "t", "foo", { base: "b", tip: "h", commits: [], tipRun }))?.text ?? "";
     assert.ok(rendered.includes("after: worktree <worktree>\nlog: <patchix>/state/t/x.txt\ncode: <patchix>/packages\n"), rendered);
     assert.ok(!rendered.includes(tmp), "the description has no local path");
     assert.equal(await readFile(file, "utf8"), output, "the stored output does not change");

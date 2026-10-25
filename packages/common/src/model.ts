@@ -153,8 +153,9 @@ export type CheckResult = z.infer<typeof CheckResultSchema>;
 
 /**
  * `state/<campaign>/tasks/<attr>/runs/<id>/run.yaml`: one try of the agent on one task, or one commit that the
- * `import` command got from a different checkout. `reply.md` of the run directory is the `stdout` of `claude`. A file
- * that patchix wrote before this version can have a `kind` key: zod removes it.
+ * `import` command got from a different checkout. `reply.md` of the run directory is the `stdout` of `claude`. The
+ * pull request reads the branch, not a run. A file that patchix wrote before this version can have a `kind` key or a
+ * `checks_of` key: zod removes them.
  */
 export const RunSchema = z.object({
   id: z.string().regex(RUN_ID),
@@ -175,7 +176,8 @@ export const RunSchema = z.object({
   /**
    * `running`: the agent or the checks operate. `ok`: `claude` stopped with code 0 and the branch has commits after
    * the base. The worktree is clean, the run has a description and each check is `pass`. A run with a question can
-   * have no description, and it can use the checks of a previous run: see `checks_of`. `unverified`: the agent
+   * have no description. It can also keep the tip of the branch when a previous run has the checks of the tip (see
+   * `tipRun`). Then the runner does not start the checks, and the run is `ok` without checks. `unverified`: the agent
    * completed the work, but a person must examine it and make the decision. One or more checks are `fail` and no
    * check is `error`. Or the work has a problem: no commit, changes without a commit in the worktree, or no
    * description. `error` gives the problem, and the runner does not start the checks for it. `wontfix`: the agent
@@ -199,12 +201,6 @@ export const RunSchema = z.object({
   head: z.string().nullable(),
   commits: z.number().int(),
   checks: z.array(CheckResultSchema),
-  /**
-   * A previous run of the task. Its checks apply to this run, and they give the status of this run. A run with a
-   * question can keep the tip of the branch. Then this field names the newest previous run with the checks of that
-   * tip, when there is one. The runner does not start the checks, and `checks` is empty. `null` for each other run.
-   */
-  checks_of: z.string().regex(RUN_ID).nullable().default(null),
   /** The number of memelint findings in `description.md`. */
   lint: z.number().int().nullable(),
   error: z.string().nullable(),
@@ -223,16 +219,15 @@ export const FleetSchema = z.object({
 export type Fleet = z.infer<typeof FleetSchema>;
 
 /**
- * `state/<campaign>/tasks/<attr>/pr.yaml`: the pull request of a task, before and after it is made.
- * `pr.md` in the same directory is the description source. It is a copy of `description.md` of the run `run`, with the
- * changes of the persons. See `render.ts` for the marks that it can contain. A file that patchix wrote before this
- * version can have a `review` key: zod removes it.
+ * `state/<campaign>/tasks/<attr>/pr.yaml`: the text of the persons for the pull request of a task, before and after it
+ * is made. `pr.md` in the same directory is the description source: a copy of `description.md` of a run, with the
+ * changes of the persons (see `makeDraft`). See `render.ts` for the marks that it can contain. The commits, the checks
+ * and the models come from the branch. A file that patchix wrote before this version can have a `review` key or a
+ * `run` key: zod removes them.
  */
 export const PrSchema = z.object({
   title: z.string().min(1),
   labels: z.array(z.string().min(1)),
-  /** The run that gave the description and the commits. */
-  run: z.string().regex(RUN_ID),
   /**
    * Technical names of this description that are not in the memelint words of the campaign. The agent gives
    * them in `words.txt` of the run. A person can move them into `campaigns/<name>/memelint.toml`.
@@ -274,16 +269,19 @@ export const TaskStateSchema = z.enum([
   "merged",
   /** The draft has the number of a pull request, and the pull request is closed without a merge. */
   "closed",
-  /** No pull request, and the newest run is `ok`: a person can examine it and make the pull request. */
+  /**
+   * No pull request, the newest run is `ok` or `unverified`, and each check of the tip of the branch is `pass` (see
+   * `tipRun`). A person can examine the branch and make the pull request.
+   */
   "ready",
   /**
-   * No pull request, and the newest run is `unverified`: the agent completed the work. But a check did not agree with
-   * its `pass` expression, or the work has a problem. A person examines the run and makes the decision. The person can
-   * make the pull request.
+   * No pull request, and the newest run is `ok` or `unverified`. But a check of the tip of the branch did not agree
+   * with its `pass` expression, or the tip has no checks. A person examines the branch and makes the decision. With
+   * the checks of the tip, the person can make the pull request.
    */
   "unverified",
   "running",
-  /** The newest run is `failed` or `stopped`. */
+  /** The newest run is `failed` or `stopped`, or a check of the tip of the branch stopped with an error. */
   "failed",
   /** The newest run is `wontfix`: the agent found no small fix. A person must change the issue entry. */
   "wontfix",
@@ -296,7 +294,7 @@ export const TaskViewSchema = TaskSchema.extend({
   state: TaskStateSchema,
   /** The branch of the task: `branch`, or `<branch_prefix><attr>`. */
   branch_name: z.string(),
-  /** The commit of `branch_name` in the repository of patchix, when the repository has the branch. */
+  /** The tip of the branch: the commit of `branch_name` in the repository of patchix, when the repository has it. */
   head: z.string().nullable(),
   /** The runs, the newest first. */
   runs: z.array(RunSchema),

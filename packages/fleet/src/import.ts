@@ -7,9 +7,9 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { ATTR, GIT_URL, type Campaign, type CheckResult, type Run } from "@patchix/common";
 import { escapeRegex } from "./checks.ts";
-import { branchName, cloneBase, diff, fetchRef, git, revParse, subject } from "./git.ts";
+import { branchName, cloneBase, fetchRef, git, revParse, subject } from "./git.ts";
 import { forkOf, prList, type ListedPr } from "./github.ts";
-import { draftFromRun, refreshPrs } from "./pr.ts";
+import { makeDraft, refreshPrs } from "./pr.ts";
 import { campaignWords, checkFile, exists, fail, listRuns, newId, now, readCampaign, readPr, readSettings, readTasks, readText, runDir, taskDir, tomlWords, writeRun, writeTasks, type Ctx } from "./store.ts";
 
 export interface ImportResult {
@@ -175,14 +175,14 @@ async function findFiles(dir: string, prefix: string, found: readonly Branch[]):
 }
 
 /**
- * Writes the run of one task of the branch. The run has one commit, the status `ok`, the parent of the commit as
- * `base`, a log of one line and the tag `imported`. Its model is the model of the settings.
+ * Writes the run of one task of the branch. The run has one commit, the status `ok`, a log of one line and the tag
+ * `imported`. Its `base` is the parent of the commit, and its `head` is the tip. Its model is the model of the
+ * settings. When the description has the output of a check, the run has the checks of the tip: see `tipRun`.
  */
-async function importRun(ctx: Ctx, campaign: Campaign, attr: string, b: Branch, url: string, patch: string, doc: Description | null, start: Date): Promise<Run> {
+async function importRun(ctx: Ctx, campaign: Campaign, attr: string, b: Branch, url: string, doc: Description | null, start: Date): Promise<Run> {
   const { model } = await readSettings(ctx);
   const id = await newId(join(taskDir(ctx, campaign.name, attr), "runs"), start);
   const dir = runDir(ctx, campaign.name, attr, id);
-  await writeFile(join(dir, "diff.patch"), patch);
   await writeFile(join(dir, "log.txt"), `[patchix ${now()}] import of the branch ${b.branch} (${b.tip}) from ${url}\n`);
   const checks: CheckResult[] = [];
   const check = campaign.checks.find((c) => c.reviewer !== undefined);
@@ -196,7 +196,7 @@ async function importRun(ctx: Ctx, campaign: Campaign, attr: string, b: Branch, 
     }
   }
   const time = now();
-  const run: Run = { id, attr, tags: ["imported"], question: null, started: time, finished: time, status: "ok", model, pid: null, base: b.base, head: b.tip, commits: 1, checks, checks_of: null, lint: null, error: null };
+  const run: Run = { id, attr, tags: ["imported"], question: null, started: time, finished: time, status: "ok", model, pid: null, base: b.base, head: b.tip, commits: 1, checks, lint: null, error: null };
   await writeRun(ctx, campaign.name, run);
   return run;
 }
@@ -246,11 +246,13 @@ export async function importBranches(ctx: Ctx, c: string, url: string, descripti
   const own = new Set(await campaignWords(ctx, c));
   const check = campaign.checks.find((x) => x.reviewer !== undefined)?.name ?? null;
 
+  // A draft gets its title from the branch of its task: thus the task list gets the branches first.
+  const branches = new Map(found.flatMap((b) => b.attrs.filter((a) => b.branch !== branchName(campaign, a)).map((a) => [a, b.branch] as const)));
+  const file = await readTasks(ctx, c);
+  if (file !== null && branches.size > 0) await writeTasks(ctx, c, { ...file, tasks: file.tasks.map((t) => ({ ...t, branch: branches.get(t.attr) ?? t.branch })) });
   const imported: ImportResult["imported"] = [];
-  const branches = new Map<string, string>();
   for (const b of found) {
     const start = new Date();
-    const patch = await diff(repo, b.base, b.tip);
     let first: string | null = null;
     for (const attr of b.attrs) {
       const name = docs?.files.get(attr);
@@ -259,17 +261,12 @@ export async function importBranches(ctx: Ctx, c: string, url: string, descripti
         const converted = convertDescription((await readText(join(dir, name))) ?? "", check, prs.get(b.branch)?.number ?? null);
         doc = { ...converted, words: scopeWords(tomlText, relative(dirname(toml), join(dir, name))).filter((w) => !own.has(w)) };
       }
-      const run = (await listRuns(ctx, c, attr)).find((r) => r.head === b.tip) ?? (await importRun(ctx, campaign, attr, b, url, patch, doc, start));
+      const run = (await listRuns(ctx, c, attr)).find((r) => r.head === b.tip) ?? (await importRun(ctx, campaign, attr, b, url, doc, start));
       first ??= run.id;
-      if (doc !== null && (await readPr(ctx, c, attr)) === null && (await exists(join(runDir(ctx, c, attr, run.id), "description.md")))) {
-        await draftFromRun(ctx, c, attr, run.id);
-      }
-      if (b.branch !== branchName(campaign, attr)) branches.set(attr, b.branch);
+      if (doc !== null && (await readPr(ctx, c, attr)) === null && (await exists(join(runDir(ctx, c, attr, run.id), "description.md")))) await makeDraft(ctx, c, attr);
     }
     imported.push({ branch: b.branch, attrs: b.attrs, run: first ?? "" });
   }
-  const file = await readTasks(ctx, c);
-  if (file !== null && branches.size > 0) await writeTasks(ctx, c, { ...file, tasks: file.tasks.map((t) => ({ ...t, branch: branches.get(t.attr) ?? t.branch })) });
   await refreshPrs(ctx, campaign, listed);
   return { imported, unmatched_branches, unmatched_files: docs?.unmatched ?? [] };
 }

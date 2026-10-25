@@ -10,7 +10,7 @@
  * - `worktree <campaign> <attr>` makes the worktree of the task and writes its path.
  * - `base <campaign>` gets the newest commit of the `base_branch` with depth 1.
  * - `adopt <campaign> <attr>` gets the branch of the task from the fork with depth 1.
- * - `draft <campaign> <attr> [run]` makes the draft of the pull request from a run (default: the newest `ok` run).
+ * - `draft <campaign> <attr>` makes the draft of the pull request: see `makeDraft`.
  * - `import <campaign> <git-url> [--descriptions <dir>]` gets the branches `<branch_prefix>*` of a different checkout
  *   with depth 2, and makes a run with the tag `imported` for each task of a branch. See `importBranches`.
  *
@@ -25,16 +25,15 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { publishable } from "@patchix/common";
 import { addWorktree, adopt, updateBase } from "./git.ts";
 import { importBranches } from "./import.ts";
 import { runFleet } from "./fleet.ts";
-import { draftFromRun, refreshPrs, renderDraft } from "./pr.ts";
+import { makeDraft, refreshPrs, renderDraft } from "./pr.ts";
 import { startRun } from "./run.ts";
-import { context, listRuns, message, readCampaign } from "./store.ts";
+import { context, message, readCampaign } from "./store.ts";
 import { sync } from "./sync.ts";
 
-const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt <campaign> <attr> | draft <campaign> <attr> [run] | import <campaign> <git-url> [--descriptions <dir>]";
+const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt <campaign> <attr> | draft <campaign> <attr> | import <campaign> <git-url> [--descriptions <dir>]";
 const options = { descriptions: { type: "string" }, root: { type: "string" }, data: { type: "string" }, path: { type: "string" } } as const;
 const { positionals, values } = parseArgs({ allowPositionals: true, options });
 if (values.path) process.env["PATH"] = values.path;
@@ -48,7 +47,7 @@ if (command === "run") for (const signal of ["SIGTERM", "SIGINT"] as const) proc
 
 async function main(): Promise<number> {
   if (campaign === undefined) throw new Error(USAGE);
-  const [attr, id] = rest;
+  const [attr] = rest;
   if (command === "sync" && rest.length === 0) {
     const result = await sync(ctx, campaign);
     for (const w of result.warnings) console.warn(`warning: ${w}`);
@@ -80,10 +79,8 @@ async function main(): Promise<number> {
     console.log((await addWorktree(ctx, await readCampaign(ctx, campaign), attr)).path);
     return 0;
   }
-  if (command === "draft" && attr !== undefined && rest.length <= 2) {
-    const run = id ?? (await listRuns(ctx, campaign, attr)).find((r) => publishable(r))?.id;
-    if (run === undefined) throw new Error(`${attr} has no ok or unverified run; give the run id`);
-    const pr = await draftFromRun(ctx, campaign, attr, run);
+  if (command === "draft" && attr !== undefined && rest.length === 1) {
+    const pr = await makeDraft(ctx, campaign, attr);
     const rendered = await renderDraft(ctx, campaign, attr);
     console.log(`${pr.title}\n\n${rendered?.text ?? ""}`);
     for (const problem of rendered?.problems ?? []) console.error(`warning: ${problem}`);

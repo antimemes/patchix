@@ -92,7 +92,7 @@ async function startOne(ctx: Ctx, campaign: Campaign, model: string, attr: strin
     const id = await newId(join(taskDir(ctx, c, attr), "runs"));
     const question = await takeQuestion(ctx, c, attr, id);
     const text = error === null ? "the run did not start" : `the run did not start: ${error}`;
-    await writeRun(ctx, c, { id, attr, tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: text });
+    await writeRun(ctx, c, { id, attr, tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
     await log(`${attr}: ${text}; the fleet wrote the failed run ${id}`);
   }
   await dequeue(ctx, c, attr);

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, screen, within } from "storybook/test";
 import type { Pr as PrMeta, TaskView } from "@patchix/common";
 import { TaskPage, type PageTab } from "./TaskPage.tsx";
 import { withMock, type MockCampaign } from "../mock/client.tsx";
@@ -12,7 +12,6 @@ import {
   description,
   failedPublishLog,
   failedRun,
-  idAt,
   importedRun,
   job,
   okRun,
@@ -76,38 +75,64 @@ export const Running: Story = {
   ],
 };
 
-export const RunCommits: Story = {
+/** The section of the branch of the task on the Work tab. */
+const branchSection = async (canvas: ReturnType<typeof within>) => within(await canvas.findByRole("region", { name: "Branch" }));
+/** The section of the runs on the Work tab. */
+const runsSection = async (canvas: ReturnType<typeof within>) => within(await canvas.findByRole("region", { name: "Runs" }));
+
+export const BranchCommits: Story = {
   parameters: {
     docs: {
       description: {
-        story: "Work tab: the Commits tab of a run gives each commit from the base to the head of the run, as `git show` gives it: the full message with the `Assisted-by:` line, then the patch of the commit.",
+        story:
+          "Work tab: the Branch section gives each commit from the base to the tip of the branch, as `git show` gives it: the full message with the `Assisted-by:` line, then the patch of the commit. The Full diff tab gives the change that the pull request button pushes.",
       },
     },
   },
   decorators: [seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }))],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole("tab", { name: "Commits" }));
-    const list = await canvas.findByRole("list", { name: /^Commits of run / });
+    const branch = await branchSection(canvas);
+    const list = await branch.findByRole("list", { name: "Commits of the branch" });
     await within(list).findByText(/Assisted-by: Claude Code \(Claude Opus 5\.5\) with patchix$/);
     await within(list).findByLabelText(/^Patch of commit /);
-    await expect(canvas.queryByRole("status", { name: "Branch moved" })).toBeNull();
+    await userEvent.click(branch.getByRole("tab", { name: "Full diff" }));
+    await branch.findByLabelText("Diff of the branch");
+    await expect(canvas.queryByRole("status", { name: "Changes without a commit" })).toBeNull();
   },
 };
 
-export const RunCommitsMoved: Story = {
+export const HandCommit: Story = {
   parameters: {
     docs: {
       description: {
-        story: "Work tab: a person changed the commit of the newest run in the worktree. The Commits tab gives the commits to the tip of the branch, and a line above the list tells that the branch moved after the run.",
+        story:
+          "Work tab, unverified: a person changed the commit of the newest run in the worktree. The Branch section gives the commit of the tip. No run has the checks of the tip: the next run starts them.",
       },
     },
   },
-  decorators: [seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: AMENDED, worktree: worktreePath(A) }))],
+  decorators: [seed(() => task(A, { state: "unverified", runs: [okRun(A, 25)], head: AMENDED, worktree: worktreePath(A) }))],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole("tab", { name: "Commits" }));
-    await canvas.findByRole("status", { name: "Branch moved" });
-    const list = await canvas.findByRole("list", { name: /^Commits of run / });
-    await within(list).findByText(`commit ${AMENDED.slice(0, 12)}`);
+    const branch = await branchSection(canvas);
+    await within(await branch.findByRole("list", { name: "Commits of the branch" })).findByText(`commit ${AMENDED.slice(0, 12)}`);
+    await userEvent.click(branch.getByRole("tab", { name: /^Checks of the tip 0\/2/ }));
+    await branch.findByText(/^No run has the checks of the tip/);
+  },
+};
+
+export const DirtyWorktree: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Work tab: the worktree has changes without a commit. A notice tells that the branch does not have them: the Full diff tab gives the diff of the branch only.",
+      },
+    },
+  },
+  decorators: [seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }), { dirty: [A] })],
+  play: async ({ canvas, userEvent }) => {
+    const branch = await branchSection(canvas);
+    await branch.findByRole("status", { name: "Changes without a commit" });
+    await userEvent.click(branch.getByRole("tab", { name: "Full diff" }));
+    await branch.findByLabelText("Diff of the branch");
   },
 };
 
@@ -146,17 +171,22 @@ export const QuestionAnswered: Story = {
   parameters: {
     docs: {
       description: {
-        story: "Work tab: a run with a question. The question is above the tabs, and the Reply tab gives the reply of the agent. The run did not move the tip of the branch: the Checks tab gives the checks of the previous run.",
+        story:
+          "Work tab: a run with a question. The question is above the tabs, and the Reply tab gives the reply of the agent. The run did not move the tip of the branch: it has no checks, and the Branch section gives the checks of the earlier run of the tip.",
       },
     },
   },
   decorators: [seed(() => task(A, { state: "ready", runs: [questionRun(A, 5), okRun(A, 25)], head: HEAD, worktree: worktreePath(A) }))],
   play: async ({ canvas, userEvent }) => {
     await canvas.findByLabelText(/^Question of run /);
-    await userEvent.click(await canvas.findByRole("tab", { name: "Reply" }));
-    await canvas.findByText(/The package reads the bundle one time, at import time/);
-    await userEvent.click(await canvas.findByRole("tab", { name: /Checks/ }));
-    await canvas.findByRole("status", { name: "Checks of a previous run" });
+    const runs = await runsSection(canvas);
+    await userEvent.click(await runs.findByRole("tab", { name: "Reply" }));
+    await runs.findByText(/The package reads the bundle one time, at import time/);
+    await userEvent.click(runs.getByRole("tab", { name: /^Checks/ }));
+    await runs.findByText(/^No checks: the run did not move the tip of the branch/);
+    const branch = await branchSection(canvas);
+    await userEvent.click(branch.getByRole("tab", { name: /^Checks of the tip 2\/2/ }));
+    await branch.findByText(/^The checks of the run/);
   },
 };
 
@@ -164,7 +194,7 @@ export const Failed: Story = {
   parameters: { docs: { description: { story: "3. Work tab, failed: the command of the harness stopped with an error. The error and the check output show." } } },
   decorators: [seed(() => task(A, { state: "failed", runs: [failedRun(A, 40), stoppedRun(A, 120)], head: HEAD }))],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole("tab", { name: /Checks/ }));
+    await userEvent.click(await (await runsSection(canvas)).findByRole("tab", { name: /^Checks/ }));
   },
 };
 
@@ -178,7 +208,7 @@ export const Unverified: Story = {
   },
   decorators: [seed(() => task(A, { state: "unverified", runs: [unverifiedRun(A, 30), failedRun(A, 120)], head: HEAD, worktree: worktreePath(A) }))],
   play: async ({ canvas, userEvent }) => {
-    await userEvent.click(await canvas.findByRole("tab", { name: /Checks/ }));
+    await userEvent.click(await (await runsSection(canvas)).findByRole("tab", { name: /^Checks/ }));
     await canvas.findByText(/A person examines it and makes the decision/);
   },
 };
@@ -193,12 +223,12 @@ export const UnverifiedToPublish: Story = {
   },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "unverified", runs: [unverifiedRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "unverified", runs: [unverifiedRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: description(A) },
     }),
   ],
   play: async ({ canvas, userEvent }) => {
-    await canvas.findByText(/The newest run is unverified: the output of harness did not agree/);
+    await canvas.findByText(/A check of the tip is unverified: the output of harness did not agree/);
     await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
   },
 };
@@ -215,16 +245,69 @@ export const Wontfix: Story = {
 };
 
 export const ReadyNoDraft: Story = {
-  parameters: { docs: { description: { story: '4. Publish tab, ready, no draft: "Make draft from run" takes the description of the newest ok run and the labels of the campaign.' } } },
+  parameters: {
+    docs: {
+      description: {
+        story: '4. Publish tab, ready, no draft: "Make draft" takes the description of the newest run with a description, the title of the tip of the branch and the labels of the campaign.',
+      },
+    },
+  },
   beforeEach: openTab("publish"),
   decorators: [seed(() => task(A, { state: "ready", runs: [okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A) }))],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Make draft" }));
+    await canvas.findByRole("textbox", { name: "Title" });
+  },
+};
+
+export const DraftAgain: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Publish tab: a newer run wrote a new description. The person makes the draft again: the dialog asks first, because the new draft replaces the title, the description and the extra words.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 5), okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, { title: "an old title" }) }), {
+      drafts: { [A]: description(A) },
+    }),
+  ],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Make draft again" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Replace" }));
+    await canvas.findByDisplayValue(`${A}: use the CA bundle of cacert`);
+  },
+};
+
+export const TipWithoutChecks: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "Publish tab: a person changed the commit in the worktree after the run. No run has the checks of the new tip: the person set the tick box, but the button stays disabled until a run gives the checks.",
+      },
+    },
+  },
+  beforeEach: openTab("publish"),
+  decorators: [
+    seed(() => task(A, { state: "unverified", runs: [okRun(A, 25)], head: AMENDED, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
+      drafts: { [A]: description(A) },
+    }),
+  ],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("checkbox", { name: CONFIRM }));
+    const reasons = await canvas.findByRole("list", { name: "Reasons that the button is disabled" });
+    await within(reasons).findByText("The tip of the branch has no checks.");
+    await expect(await canvas.findByRole("button", { name: "Push and create pull request" })).toBeDisabled();
+  },
 };
 
 export const ReadyDraft: Story = {
   parameters: { docs: { description: { story: "5. Publish tab, with a draft: two lint findings and a run with a question that operates. The findings do not stop the pull request: the run stops it, and the pull request button gives the reasons." } } },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "running", runs: [{ ...runningRun(A, 2), question: QUESTION }, okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "running", runs: [{ ...runningRun(A, 2), question: QUESTION }, okRun(A, 25), failedRun(A, 90)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: roughDescription(A) },
       jobs: [job(A, 2)],
     }),
@@ -261,7 +344,7 @@ export const TrailerMissing: Story = {
   },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: description(A) },
       commitProblems: { [A]: trailerProblems(A) },
     }),
@@ -290,7 +373,7 @@ export const MarkProblem: Story = {
   },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: badMarkDescription(A) },
     }),
   ],
@@ -308,7 +391,7 @@ export const ReadyToPublish: Story = {
   parameters: { docs: { description: { story: "6. Publish tab, ready: an ok run and no job. The person set the tick box: they established confidence in this output. Thus the button is enabled." } } },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: description(A) },
     }),
   ],
@@ -321,7 +404,7 @@ export const DraftNotSaved: Story = {
   parameters: { docs: { description: { story: "Publish tab: the draft has a change that is not saved. The findings are of the saved draft: lint runs when the person saves the draft." } } },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: roughDescription(A) },
     }),
   ],
@@ -335,7 +418,7 @@ export const PublishCreated: Story = {
   parameters: { docs: { description: { story: "Publish tab: the person set the tick box and clicked Push and create pull request. The Output under the button opens and gives each command and its output. The tick box is clear again, and the link of the pull request gives the time of the confirmation." } } },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: description(A) },
     }),
   ],
@@ -357,7 +440,7 @@ export const Publishing: Story = {
   },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
       drafts: { [A]: description(A) },
       publishLogs: { [A]: failedPublishLog(A) },
     }),
@@ -384,7 +467,7 @@ export const PublishFailed: Story = {
         {
           campaign: CAMPAIGN,
           synced: at(30),
-          tasks: [task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) })],
+          tasks: [task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) })],
           drafts: { [A]: description(A) },
         },
       ],
@@ -405,7 +488,7 @@ export const PublishFailed: Story = {
 };
 
 /** The branch of the fork has a different commit: the fork rejects a push without the tick box `Force push`. */
-const rejectedFork = seed(() => task(A, { state: "ready", runs: [importedRun(A, 25)], head: AMENDED, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25)) }), {
+const rejectedFork = seed(() => task(A, { state: "ready", runs: [importedRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), {
   drafts: { [A]: description(A) },
   rejected: [A],
 });
@@ -462,7 +545,7 @@ export const PublishPreview: Story = {
   },
   beforeEach: openTab("publish"),
   decorators: [
-    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, idAt(25), { labels: ["1.severity: security", "6.topic: python"] }) }), {
+    seed(() => task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A, { labels: ["1.severity: security", "6.topic: python"] }) }), {
       drafts: { [A]: description(A) },
     }),
   ],
@@ -476,7 +559,7 @@ export const LabelsUnavailable: Story = {
   beforeEach: openTab("publish"),
   decorators: [
     withMock(() => ({
-      campaigns: [{ campaign: CAMPAIGN, synced: at(30), tasks: [task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, pr_meta: prMeta(A, idAt(25)) })], drafts: { [A]: description(A) } }],
+      campaigns: [{ campaign: CAMPAIGN, synced: at(30), tasks: [task(A, { state: "ready", runs: [okRun(A, 25)], head: HEAD, pr_meta: prMeta(A) })], drafts: { [A]: description(A) } }],
       fail: { labels: [502, "gh label list: HTTP 401: Bad credentials"] },
     })),
   ],
@@ -492,7 +575,7 @@ export const Pr: Story = {
           state: "pr",
           runs: [okRun(A, 300)],
           head: HEAD,
-          pr_meta: prMeta(A, idAt(300), {
+          pr_meta: prMeta(A, {
             number: 580114,
             url: "https://github.com/NixOS/nixpkgs/pull/580114",
             created: at(200),
@@ -507,7 +590,7 @@ export const Pr: Story = {
 };
 
 const made = (minutesAgo: number, p: Partial<PrMeta> = {}) =>
-  prMeta(A, idAt(minutesAgo), {
+  prMeta(A, {
     number: 579002,
     url: "https://github.com/NixOS/nixpkgs/pull/579002",
     created: at(minutesAgo - 100),
@@ -552,7 +635,7 @@ export const Imported: Story = {
   },
   args: { attr: RUBY },
   decorators: [
-    seed(() => task(RUBY, { state: "ready", runs: [importedRun(RUBY, 30)], branch: SHARED, branch_name: SHARED, head: HEAD, pr_meta: prMeta(RUBY, idAt(30), { words: ["gem"] }) }), {
+    seed(() => task(RUBY, { state: "ready", runs: [importedRun(RUBY, 30)], branch: SHARED, branch_name: SHARED, head: HEAD, pr_meta: prMeta(RUBY, { words: ["gem"] }) }), {
       drafts: { [RUBY]: description(RUBY) },
     }),
   ],

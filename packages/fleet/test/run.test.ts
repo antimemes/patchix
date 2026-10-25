@@ -13,12 +13,15 @@ import { CONFIRM_ERROR, type Campaign, type PublishInput } from "@patchix/common
 import { parseIssueTasks } from "../src/issue.ts";
 import {
   adopt,
+  branchCommits,
+  branchDiff,
+  branchState,
   cloneBase,
   commitProblems,
   createOrUpdatePr,
-  draftFromRun,
   exists,
   listRuns,
+  makeDraft,
   publishLogOf,
   push,
   questionFile,
@@ -28,7 +31,6 @@ import {
   readPublishLog,
   renderDraft,
   repoPath,
-  runCommits,
   runDir,
   runSource,
   startRun,
@@ -186,7 +188,8 @@ test("a run with a commit, a description and a check that passes is ok", async (
   assert.equal(run.checks[0]?.status, "pass");
   assert.equal(run.lint, 0, "memelint accepts the description with the castore word of words.txt");
   const dir = runDir(ctx, "t", "foo", run.id);
-  assert.match(await readFile(join(dir, "diff.patch"), "utf8"), /\+ca = "cacert";/);
+  assert.equal(await exists(join(dir, "diff.patch")), false, "the branch has the diff, not the run");
+  assert.match(await branchDiff(ctx, campaign, "foo"), /^diff --git a\/pkgs\/foo\/default.nix [^]*\n\+ca = "cacert";\n$/);
   assert.ok(await exists(join(dir, "description.md")));
   assert.match(await readFile(join(dir, "reply.md"), "utf8"), /^fake claude in /, "reply.md is the stdout of claude");
   assert.equal(run.question, null);
@@ -215,16 +218,17 @@ test("a run with a commit, a description and a check that passes is ok", async (
   assert.equal(view?.branch_name, "t/foo");
   assert.equal(view?.worktree, worktreePath(ctx, campaign, "foo"), "the worktree stays");
 
-  const pr = await draftFromRun(ctx, "t", "foo", run.id);
-  assert.equal(pr.title, "foo: use cacert bundle instead of bundled CA file");
+  const pr = await makeDraft(ctx, "t", "foo");
+  assert.deepEqual([pr.title, pr.labels, pr.number], ["foo: use cacert bundle instead of bundled CA file", ["1.severity: security"], null]);
   assert.deepEqual(pr.words, ["castore"]);
   assert.match((await readDraft(ctx, "t", "foo")) ?? "", /^Part of #1\./);
   assert.deepEqual((await renderDraft(ctx, "t", "foo"))?.problems, [], "the marks of the draft have no problem");
   const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
   assert.ok(!rendered.includes("{{"), rendered);
   assert.match(rendered, /harness foo --pr <this PR>/);
-  const { commits, head, moved } = await runCommits(ctx, "t", "foo", run.id);
-  assert.deepEqual([head, moved], [run.head, false]);
+  assert.match(rendered, /VERDICT foo emudhra: FIXED/, "the output of the check of the tip");
+  assert.match(rendered, /Claude Code used Claude Opus 5\.5\./, "the model of the Assisted-by line, not the model of the settings");
+  const commits = await branchCommits(ctx, campaign, "foo");
   assert.deepEqual(
     commits.map(({ sha, subject, message }) => ({ sha, subject, message })),
     [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", message: "foo: use cacert bundle instead of bundled CA file\n\nAssisted-by: Claude Code (Claude Opus 5.5) with patchix" }],
@@ -323,6 +327,7 @@ test("a run without a commit and with the heading `## No small fix` is wontfix; 
     assert.deepEqual([run.status, run.error, run.head, run.commits, run.checks], ["wontfix", null, null, 0, []]);
     assert.notEqual(run.lint, null, "memelint examines the description");
     assert.equal((await taskViews(ctx, "t")).find((v) => v.attr === "baz")?.state, "wontfix");
+    await assert.rejects(makeDraft(ctx, "t", "baz"), (e: Error & { status?: number }) => e.status === 409 && e.message === "no run of the task has a description.md");
     process.env["PATCHIX_TEST_NO_FIX"] = "dirty";
     const dirty = await startRun(ctx, "t", "baz");
     assert.deepEqual([dirty.status, dirty.error, dirty.checks], ["unverified", "the worktree has changes without a commit", []], "the work of the agent does not make a run failed");
@@ -338,13 +343,13 @@ test("a run with a check that does not pass is unverified; with a check that sto
     const run = await startRun(ctx, "t", "qux");
     assert.deepEqual([run.status, run.error, run.commits, run.checks.map((c) => c.status)], ["unverified", null, 1, ["fail"]]);
     assert.equal((await taskViews(ctx, "t")).find((v) => v.attr === "qux")?.state, "unverified");
-    const pr = await draftFromRun(ctx, "t", "qux", run.id);
-    assert.equal(pr.run, run.id, "a person can make a draft from an unverified run");
+    const pr = await makeDraft(ctx, "t", "qux");
+    assert.equal(pr.title, "foo: use cacert bundle instead of bundled CA file", "a person can make a draft from an unverified run");
     process.env["PATCHIX_TEST_CHECK"] = "error";
     const error = await startRun(ctx, "t", "qux");
     assert.deepEqual([error.status, error.error, error.commits, error.checks.map((c) => c.status)], ["failed", "check harness: error", 1, ["error"]]);
     assert.equal((await taskViews(ctx, "t")).find((v) => v.attr === "qux")?.state, "failed");
-    await assert.rejects(createOrUpdatePr(ctx, "t", "qux", { confirmed: true }), (e: Error & { status?: number }) => e.status === 409 && /is not ok or unverified/.test(e.message));
+    await assert.rejects(createOrUpdatePr(ctx, "t", "qux", { confirmed: true }), (e: Error & { status?: number }) => e.status === 409 && e.message === "a check of the tip stopped with an error: harness");
   } finally {
     delete process.env["PATCHIX_TEST_CHECK"];
   }
@@ -356,8 +361,8 @@ test("a commit that does not agree with the automation/AI policy does not change
     const run = await startRun(ctx, "t", "quux");
     assert.deepEqual([run.status, run.error, run.commits, run.checks.map((c) => c.status)], ["ok", null, 1, ["pass"]]);
     const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
-    assert.deepEqual(await commitProblems(ctx, campaign, "quux", run.base, null), [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", problems }]);
-    await draftFromRun(ctx, "t", "quux", run.id);
+    assert.deepEqual(commitProblems((await branchState(ctx, campaign, "quux")).commits), [{ sha: run.head, subject: "foo: use cacert bundle instead of bundled CA file", problems }]);
+    await makeDraft(ctx, "t", "quux");
     await assert.rejects(createOrUpdatePr(ctx, "t", "quux", { confirmed: true }), (e: Error & { status?: number }) => {
       assert.deepEqual([e.status, e.message, publishLogOf(e)], [409, `the branch does not agree with the automation/AI policy of nixpkgs: commit ${run.head?.slice(0, 12)}: ${problems.join(", ")}`, null]);
       return true;
@@ -369,7 +374,7 @@ test("a commit that does not agree with the automation/AI policy does not change
 
 test("a run of a task that has a job is refused", async () => {
   const id = "20260101-000000";
-  const record = { id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, model: "m", base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null };
+  const record = { id, attr: "foo", tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, model: "m", base: "", head: null, commits: 0, checks: [], lint: null };
   // A process with the words `run t foo` in its command line operates as the runner.
   const runner = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)", "run", "t", "foo"], { stdio: "ignore" });
   await once(runner, "spawn");
@@ -414,28 +419,46 @@ test("a run with a question continues the conversation; the checks start only wh
   };
 
   const asked = await ask("Why this change?");
-  assert.deepEqual([asked.run.status, asked.run.error, asked.run.head, asked.run.checks, asked.run.checks_of, asked.run.lint], ["ok", null, first.head, [], first.id, null], "the checks of the first run apply");
+  assert.deepEqual([asked.run.status, asked.run.error, asked.run.head, asked.run.checks, asked.run.lint], ["ok", null, first.head, [], null], "no checks: the tip did not move, and it has checks");
   assert.equal(await exists(join(asked.dir, "checks")), false, "the runner did not start the checks");
-  assert.match(await asked.read("log.txt"), / -p <prompt\.md> --continue --model claude-opus-5-6 [^]*the checks of the run \d{8}-\d{6} apply: the branch did not change\n/);
+  assert.match(await asked.read("log.txt"), / -p <prompt\.md> --continue --model claude-opus-5-6 [^]*the tip of the branch did not move, and a previous run has its checks: no checks\n/);
+  assert.equal((await branchState(ctx, campaign, "foo")).tipRun?.id, first.id, "the checks of the first run apply to the tip");
   const short = await asked.read("prompt.md");
   assert.match(short, /^# The task\n[^]*\n\n# The question\n[^]*\n\nWhy this change\?\n$/, "the conversation has the instructions of the campaign: the prompt starts with the task block");
+  // The agent of a question writes `description.md` again when the change makes the description incorrect: the draft gets the newest description.
+  await writeFile(join(asked.dir, "description.md"), "Part of #1.\n\nThe new description.\n");
+  await makeDraft(ctx, "t", "foo");
+  assert.deepEqual([await readDraft(ctx, "t", "foo"), (await readPr(ctx, "t", "foo"))?.number], ["Part of #1.\n\nThe new description.\n", 42], "the draft keeps the pull request number");
 
   const dirty = await ask("Change a file, but do not commit it.");
-  assert.deepEqual([dirty.run.status, dirty.run.error, dirty.run.checks, dirty.run.checks_of], ["unverified", "the worktree has changes without a commit", [], null]);
+  assert.deepEqual([dirty.run.status, dirty.run.error, dirty.run.checks], ["unverified", "the worktree has changes without a commit", []]);
+  await assert.rejects(createOrUpdatePr(ctx, "t", "foo", { confirmed: true }), (e: Error & { status?: number }) => e.status === 409 && e.message === "the worktree of foo has changes without a commit: the branch does not have them");
   git(wt, "checkout", "-q", "--", ".");
 
   process.env["PATCHIX_TEST_NO_CONVERSATION"] = "1";
   try {
     const amended = await ask("Amend the fix: add a line.");
-    assert.deepEqual([amended.run.status, amended.run.error, amended.run.checks_of, amended.run.checks.map((c) => c.status)], ["ok", null, null, ["pass"]], "the tip moved: the runner starts the checks");
+    assert.deepEqual([amended.run.status, amended.run.error, amended.run.checks.map((c) => c.status)], ["ok", null, ["pass"]], "the tip moved: the runner starts the checks");
     assert.equal(amended.run.head, git(wt, "rev-parse", "HEAD"));
     assert.notEqual(amended.run.head, first.head);
+    assert.equal((await branchState(ctx, campaign, "foo")).tipRun?.id, amended.run.id);
     assert.match(await amended.read("log.txt"), /claude --continue: exit code 1; again without --continue, with the full prompt\n/);
     const full = await amended.read("prompt.md");
     assert.match(full, /^# The test campaign\n\nFix the package\.\n\nWrite short sentences\.\n\n# The task\n[^]*\n\n# The question\n[^]*\n\nAmend the fix: add a line\.\n$/, "no conversation: the full prompt, then the question");
   } finally {
     delete process.env["PATCHIX_TEST_NO_CONVERSATION"];
   }
+
+  // A person changes the commit in the worktree: no run has the checks of the new tip, thus the pull request waits for a run.
+  git(wt, "commit", "-q", "--amend", "-m", "foo: a commit by hand", "-m", "Assisted-by: Claude Code (Claude Opus 5.5) with patchix");
+  const hand = git(wt, "rev-parse", "HEAD");
+  assert.equal((await branchState(ctx, campaign, "foo")).tipRun, undefined);
+  await assert.rejects(createOrUpdatePr(ctx, "t", "foo", { confirmed: true }), (e: Error & { status?: number }) => e.status === 409 && e.message === "the tip of the branch has no checks");
+  // A question that does not move this tip starts the checks: no previous run has them.
+  const checked = await ask("Is the change correct?");
+  assert.deepEqual([checked.run.status, checked.run.error, checked.run.head, checked.run.checks.map((c) => c.status)], ["ok", null, hand, ["pass"]], "the tip did not move, and it had no checks");
+  assert.doesNotMatch(await checked.read("log.txt"), /did not move/);
+  assert.equal((await branchState(ctx, campaign, "foo")).tipRun?.id, checked.run.id, "the question run has the checks of the tip");
 });
 
 test("the base update, the adopt and the source get a bounded number of commits", async () => {

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Campaign, Run, TaskView } from "@patchix/common";
+import { tipRun } from "@patchix/common/status";
 import { Badge, StatusBadge } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
 import { CodeBlock } from "../components/CodeBlock.tsx";
@@ -11,7 +12,58 @@ import { useLoad } from "../hooks.ts";
 import { AttachNotice, RemoteText, RunBadges, TagBadges } from "./shared.tsx";
 import "./views.css";
 
-export type RunTab = "diff" | "commits" | "checks" | "prompt" | "description" | "reply";
+export type BranchTab = "commits" | "diff" | "checks";
+export type RunTab = "checks" | "prompt" | "description" | "reply";
+
+/**
+ * The branch of the task: the change that the pull request button pushes. The commits and the full diff go from the
+ * base to the tip, and the checks are the checks of the tip (see `tipRun`). `clean`: see `TaskDetail.clean`.
+ */
+export function BranchSection({ campaign, task, clean }: { campaign: Campaign; task: TaskView; clean: boolean }) {
+  const client = useClient();
+  const [tab, setTab] = useState<BranchTab>("commits");
+  const c = campaign.name;
+  const checked = tipRun(task.runs, task.head);
+  // A new tip and a new run can change the commits and the diff.
+  const version = `${c}/${task.attr}/${task.head ?? "none"}/${task.runs.length}`;
+  return (
+    <section className="panel" aria-label="Branch">
+      <div className="panel-head">
+        <h2>Branch</h2>
+        <span className="small mono muted break">{task.head === null ? task.branch_name : `${task.branch_name} at ${short(task.head)}`}</span>
+      </div>
+      {!clean && (
+        <Notice tone="warning" aria-label="Changes without a commit">
+          The worktree has changes without a commit. The branch does not have them, and the pull request button does not push them.
+        </Notice>
+      )}
+      <Tabs<BranchTab>
+        label="Parts of the branch"
+        value={tab}
+        onValueChange={setTab}
+        items={[
+          { value: "commits", label: "Commits", content: <CommitsView campaign={c} attr={task.attr} version={version} /> },
+          { value: "diff", label: "Full diff", content: <RemoteText label="Diff of the branch" diff loadKey={`diff:${version}`} load={() => client.diff(c, task.attr)} empty="No commits after the base." /> },
+          {
+            value: "checks",
+            label: `Checks of the tip ${checked?.checks.length ?? 0}/${campaign.checks.length}`,
+            content:
+              checked === undefined ? (
+                <p className="muted">No run has the checks of the tip. Queue a run or ask a question: the runner starts the checks of the tip.</p>
+              ) : (
+                <div className="stack">
+                  <p className="small muted">
+                    The checks of the run <span className="mono">{checked.id}</span>.
+                  </p>
+                  <ChecksView campaign={campaign} attr={task.attr} run={checked} />
+                </div>
+              ),
+          },
+        ]}
+      />
+    </section>
+  );
+}
 
 export interface RunsSectionProps {
   campaign: Campaign;
@@ -24,7 +76,7 @@ export interface RunsSectionProps {
 
 export function RunsSection({ campaign, task, queued, question }: RunsSectionProps) {
   const [chosen, setChosen] = useState<string | null>(null);
-  const [tab, setTab] = useState<RunTab>("diff");
+  const [tab, setTab] = useState<RunTab>("checks");
   const run = task.runs.find((r) => r.id === chosen) ?? task.runs[0];
   return (
     <section className="panel" aria-label="Runs">
@@ -84,7 +136,7 @@ export function RunsSection({ campaign, task, queued, question }: RunsSectionPro
               </tbody>
             </table>
           </div>
-          {run !== undefined && <RunView campaign={campaign} attr={task.attr} run={run} checksRun={task.runs.find((r) => r.id === run.checks_of) ?? run} tab={tab} onTab={setTab} />}
+          {run !== undefined && <RunView campaign={campaign} attr={task.attr} run={run} tab={tab} onTab={setTab} />}
         </>
       )}
     </section>
@@ -95,17 +147,16 @@ interface RunViewProps {
   campaign: Campaign;
   attr: string;
   run: Run;
-  /** The run with the checks that apply: `run`, or the run of `checks_of`. See `RunSchema.checks_of`. */
-  checksRun: Run;
   tab: RunTab;
   onTab: (tab: RunTab) => void;
 }
 
-export function RunView({ campaign, attr, run, checksRun, tab, onTab }: RunViewProps) {
+/** One run: its question, its status, its checks and its files. The Branch section gives the change of the pull request. */
+export function RunView({ campaign, attr, run, tab, onTab }: RunViewProps) {
   const client = useClient();
   const c = campaign.name;
   const running = run.status === "running";
-  const version = (r: Run) => `${c}/${attr}/${r.id}/${r.finished ?? "running"}`;
+  const version = `${c}/${attr}/${run.id}/${run.finished ?? "running"}`;
   return (
     <div className="stack">
       <div className="row">
@@ -139,30 +190,11 @@ export function RunView({ campaign, attr, run, checksRun, tab, onTab }: RunViewP
         value={tab}
         onValueChange={onTab}
         items={[
-          {
-            value: "diff",
-            label: "Full diff",
-            content: <RemoteText label="Full diff" diff loadKey={`diff:${version(run)}`} load={() => client.runFile(c, attr, run.id, "diff")} empty="No diff." />,
-          },
-          {
-            value: "commits",
-            label: "Commits",
-            content: <CommitsView campaign={c} attr={attr} run={run} version={version(run)} />,
-          },
-          {
-            value: "checks",
-            label: `Checks ${checksRun.checks.length}/${campaign.checks.length}`,
-            content: (
-              <div className="stack">
-                {checksRun !== run && <Notice aria-label="Checks of a previous run">The checks of run {checksRun.id} apply: the branch did not change.</Notice>}
-                <ChecksView campaign={campaign} attr={attr} run={checksRun} version={version(checksRun)} />
-              </div>
-            ),
-          },
+          { value: "checks", label: `Checks ${run.checks.length}/${campaign.checks.length}`, content: <ChecksView campaign={campaign} attr={attr} run={run} /> },
           {
             value: "prompt",
             label: "Prompt",
-            content: <RemoteText label="Prompt" wrap loadKey={`prompt:${version(run)}`} load={() => client.runFile(c, attr, run.id, "prompt")} empty="No prompt." />,
+            content: <RemoteText label="Prompt" wrap loadKey={`prompt:${version}`} load={() => client.runFile(c, attr, run.id, "prompt")} empty="No prompt." />,
           },
           {
             value: "description",
@@ -172,12 +204,12 @@ export function RunView({ campaign, attr, run, checksRun, tab, onTab }: RunViewP
                 {run.lint !== null && run.lint > 0 && <Badge tone="amber">{run.lint}</Badge>}
               </>
             ),
-            content: <RemoteText label="Description" wrap loadKey={`description:${version(run)}`} load={() => client.runFile(c, attr, run.id, "description")} empty="No description." />,
+            content: <RemoteText label="Description" wrap loadKey={`description:${version}`} load={() => client.runFile(c, attr, run.id, "description")} empty="No description." />,
           },
           {
             value: "reply",
             label: "Reply",
-            content: <RemoteText label="Reply" wrap loadKey={`reply:${version(run)}`} load={() => client.runFile(c, attr, run.id, "reply")} empty="No reply." />,
+            content: <RemoteText label="Reply" wrap loadKey={`reply:${version}`} load={() => client.runFile(c, attr, run.id, "reply")} empty="No reply." />,
           },
         ]}
       />
@@ -186,43 +218,39 @@ export function RunView({ campaign, attr, run, checksRun, tab, onTab }: RunViewP
 }
 
 /**
- * The commits from the base to the head of the run, as `git show` gives them. Each commit has its short id, its full
- * message and its patch. The full message shows the last lines, for example `Assisted-by:`. For the newest run, the
- * list ends at the tip of the branch. When the branch changed after the run, a line above the list tells it. See
- * `RunCommits`.
+ * The commits of the branch from the base to the tip, as `git show` gives them. Each commit has its short id, its full
+ * message and its patch. The full message shows the last lines, for example `Assisted-by:`.
  */
-function CommitsView({ campaign, attr, run, version }: { campaign: string; attr: string; run: Run; version: string }) {
+function CommitsView({ campaign, attr, version }: { campaign: string; attr: string; version: string }) {
   const client = useClient();
-  const commits = useLoad(() => client.commits(campaign, attr, run.id), `commits:${version}`);
+  const commits = useLoad(() => client.commits(campaign, attr), `commits:${version}`);
   if (commits.error !== null) return <Notice tone="error">{commits.error}</Notice>;
   if (commits.data === null) return <p className="small muted">Loading…</p>;
-  const { commits: list, moved } = commits.data;
+  if (commits.data.length === 0) return <p className="muted">No commits after the base.</p>;
   return (
-    <div className="stack">
-      {moved && <Notice aria-label="Branch moved">The branch moved after this run: the list shows the branch.</Notice>}
-      {list.length === 0 ? (
-        <p className="muted">{run.status === "running" ? "The run did not stop. Its commits show at its end." : "No commits."}</p>
-      ) : (
-        <ul className="plain commits" aria-label={`Commits of run ${run.id}`}>
-          {list.map((commit) => (
-            <li key={commit.sha} className="commit">
-              <span className="mono muted small" title={commit.sha}>
-                commit {short(commit.sha)}
-              </span>
-              <pre className="commit-message">{commit.message}</pre>
-              <CodeBlock label={`Patch of commit ${short(commit.sha)}`} text={commit.patch} diff empty="No changes." />
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <ul className="plain commits" aria-label="Commits of the branch">
+      {commits.data.map((commit) => (
+        <li key={commit.sha} className="commit">
+          <span className="mono muted small" title={commit.sha}>
+            commit {short(commit.sha)}
+          </span>
+          <pre className="commit-message">{commit.message}</pre>
+          <CodeBlock label={`Patch of commit ${short(commit.sha)}`} text={commit.patch} diff empty="No changes." />
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function ChecksView({ campaign, attr, run, version }: { campaign: Campaign; attr: string; run: Run; version: string }) {
+/** The checks of one run and their output. A run with a question that did not move the tip of the branch has no checks. */
+function ChecksView({ campaign, attr, run }: { campaign: Campaign; attr: string; run: Run }) {
   const client = useClient();
+  const version = `${campaign.name}/${attr}/${run.id}/${run.finished ?? "running"}`;
   const names = [...new Set([...run.checks.map((c) => c.name), ...campaign.checks.map((c) => c.name)])];
   if (names.length === 0) return <p className="muted">The campaign has no checks.</p>;
+  if (run.checks.length === 0 && run.status !== "running") {
+    return <p className="muted">{run.question !== null && run.error === null ? "No checks: the run did not move the tip of the branch. The Branch section gives the checks of the tip." : "No checks: the runner did not start them."}</p>;
+  }
   return (
     <ul className="plain stack">
       {names.map((name) => {

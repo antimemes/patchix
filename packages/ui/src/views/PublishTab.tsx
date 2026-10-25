@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
-import { publishable } from "@patchix/common/status";
-import type { DraftInput, Pr, Run, TaskDetail} from "@patchix/common";
+import { tipProblem, tipRun } from "@patchix/common/status";
+import type { DraftInput, Pr, Run, TaskDetail } from "@patchix/common";
 import { ApiError } from "../api.ts";
 import { Badge, STATE_TONE } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
@@ -54,7 +54,10 @@ function shownOutput(file: string | null, attempt: Attempt | null, pending: bool
 export interface PrState {
   hasDraft: boolean;
   draftDirty: boolean;
-  newestRun: Run | undefined;
+  /** The newest run with the checks of the tip of the branch. See `tipRun`. */
+  tipRun: Run | undefined;
+  /** See `TaskDetail.clean`. */
+  clean: boolean;
   jobRunning: boolean;
   /** The state of the pull request on GitHub, or `null` when the draft has no pull request. */
   prState: Pr["state"] | null;
@@ -77,8 +80,9 @@ export function prBlockers(s: PrState): string[] {
   if (!s.hasDraft) reasons.push("Make a draft first.");
   if (s.draftDirty) reasons.push("Save the changes of the draft.");
   reasons.push(...s.markProblems);
-  if (s.newestRun === undefined) reasons.push("The task has no run.");
-  else if (!publishable(s.newestRun)) reasons.push(`The newest run is ${s.newestRun.status}, not ok or unverified.`);
+  const tip = tipProblem(s.tipRun);
+  if (tip !== null) reasons.push(`${tip.charAt(0).toUpperCase()}${tip.slice(1)}.`);
+  if (!s.clean) reasons.push("The worktree has changes without a commit. Commit them or remove them, then reload.");
   if (s.jobRunning) reasons.push("A job of this task operates.");
   if (s.prState === "merged") reasons.push("The pull request is merged. patchix does not change a merged pull request.");
   if (s.prState === "closed") reasons.push("The pull request is closed. Open it again on GitHub, then refresh the campaign.");
@@ -100,10 +104,8 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const c = campaign.name;
   const attr = task.attr;
   const meta = task.pr_meta;
-  const newestRun = task.runs[0];
-  /** The newest run that can give a draft: `ok`, or `unverified`. See `publishable`. */
-  const newestOk = task.runs.find(publishable);
-  const unmet = newestRun?.status === "unverified" ? newestRun.checks.filter((r) => r.status !== "pass").map((r) => r.name) : [];
+  const checked = tipRun(task.runs, task.head);
+  const unmet = checked?.checks.filter((r) => r.status === "fail").map((r) => r.name) ?? [];
   const labels = useLoad(() => client.labels(c), `labels:${c}`);
   const settings = useLoad(() => client.settings(), "settings");
   const fork = settings.data?.fork_effective ?? null;
@@ -137,10 +139,10 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     setEdit(null);
     toast("Draft saved");
   });
-  const fromRun = useAction(async (run: string) => {
-    onDetail(await client.draftFromRun(c, attr, { run }));
+  const seed = useAction(async () => {
+    onDetail(await client.makeDraft(c, attr));
     setEdit(null);
-    toast("Draft made", `From run ${run}.`);
+    toast("Draft made");
   });
   const publish = useAction(async () => {
     const updating = meta?.number != null;
@@ -173,7 +175,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
-  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, newestRun, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems, markProblems: detail.mark_problems });
+  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, tipRun: checked, clean: detail.clean, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems, markProblems: detail.mark_problems });
 
   if (draft === null) {
     return (
@@ -181,16 +183,15 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
         <h2>Pull request</h2>
         <p className="muted">No draft.</p>
         <div className="row">
-          <Button variant="primary" disabled={newestOk === undefined} pending={fromRun.pending} onClick={() => newestOk && void fromRun.run(newestOk.id)}>
-            Make draft from run{newestOk === undefined ? "" : ` ${newestOk.id}`}
+          <Button variant="primary" pending={seed.pending} onClick={() => void seed.run()}>
+            Make draft
           </Button>
         </div>
         <p className="small muted">
-          {newestOk === undefined
-            ? "No run is ok or unverified. A draft needs the description of such a run."
-            : `The draft gets the description of the run and the labels of the campaign: ${campaign.labels.join(", ") || "none"}.`}
+          The draft gets the description of the newest run with a description that is not wontfix, the title of the tip of the branch and the labels of the campaign:{" "}
+          {campaign.labels.join(", ") || "none"}.
         </p>
-        {fromRun.error !== null && <Notice tone="error">{fromRun.error}</Notice>}
+        {seed.error !== null && <Notice tone="error">{seed.error}</Notice>}
       </section>
     );
   }
@@ -198,27 +199,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   return (
     <div className="stack-lg">
       {meta !== null && meta.number !== null && <PrDone meta={meta} number={meta.number} repo={campaign.issue.repo} />}
-      {meta !== null && newestOk !== undefined && newestOk.id !== meta.run && (
-        <Notice tone="warning">
-          <div className="row">
-            <span>
-              The draft is from run <span className="mono">{meta.run}</span>. The newest {newestOk.status} run is <span className="mono">{newestOk.id}</span>.
-            </span>
-            <ConfirmDialog
-              trigger={
-                <Button size="sm" pending={fromRun.pending}>
-                  Make draft from run {newestOk.id}
-                </Button>
-              }
-              title="Replace the draft?"
-              description="The new draft replaces the title, the description and the extra words. The labels and the pull request number stay."
-              confirmLabel="Replace"
-              onConfirm={() => void fromRun.run(newestOk.id)}
-            />
-          </div>
-        </Notice>
-      )}
-      {fromRun.error !== null && <Notice tone="error">{fromRun.error}</Notice>}
+      {seed.error !== null && <Notice tone="error">{seed.error}</Notice>}
       <div className="publish">
         <section className="panel stack" aria-label="Draft">
           <h2>Draft</h2>
@@ -269,6 +250,17 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
             <Button variant="ghost" disabled={!draftDirty} onClick={() => setEdit(null)}>
               Discard changes
             </Button>
+            <ConfirmDialog
+              trigger={
+                <Button variant="ghost" pending={seed.pending}>
+                  Make draft again
+                </Button>
+              }
+              title="Replace the draft?"
+              description="The new draft gets the description of the newest run with a description, and the title of the tip of the branch. The labels and the pull request number stay."
+              confirmLabel="Replace"
+              onConfirm={() => void seed.run()}
+            />
             {draftDirty && <span className="small muted">Changes not saved</span>}
           </div>
           {save.error !== null && <Notice tone="error">{save.error}</Notice>}
@@ -297,7 +289,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
           <section className="subsection" aria-label="Create">
             {unmet.length > 0 && (
               <Notice tone="warning">
-                The newest run is unverified: the output of {unmet.join(", ")} did not agree with the pass expression. Examine the check output on the Work tab, then make the decision.
+                A check of the tip is unverified: the output of {unmet.join(", ")} did not agree with the pass expression. Examine the check output on the Work tab, then make the decision.
               </Notice>
             )}
             <Checkbox

@@ -8,7 +8,6 @@ import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   CONFIRM_ERROR,
-  DraftFromRunSchema,
   DraftInputSchema,
   ImportInputSchema,
   JobInputSchema,
@@ -76,7 +75,7 @@ async function summaries(ctx: fleet.Ctx): Promise<CampaignSummary[]> {
 
 /**
  * The task with its draft. memelint examines the draft each time: the time of memelint is less than one second.
- * `git log` examines the commits from the base of the newest run to the tip of the branch each time.
+ * `git log` examines the commits of the branch each time, and `git status` the worktree.
  */
 async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDetail> {
   const campaign = await fleet.readCampaign(ctx, c);
@@ -85,16 +84,12 @@ async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDeta
     console.error(`lint ${c}/${attr}: ${fleet.message(e)}`);
     return null;
   });
-  const base = task.runs[0]?.base ?? "";
-  // When `git log` gives an error, the page shows no problem. The pull request route examines the commits again and gives the error.
-  const problems =
-    base === "" || task.head === null
-      ? []
-      : await fleet.commitProblems(ctx, campaign, attr, base, task.head).catch((e: unknown) => {
-          console.error(`commits ${c}/${attr}: ${fleet.message(e)}`);
-          return [];
-        });
-  const rendered = await fleet.renderDraft(ctx, c, attr);
+  // When `git` gives an error, the page shows the task without the branch. The pull request route reads the branch again and gives the error.
+  const branch = await fleet.branchState(ctx, campaign, attr).catch((e: unknown): fleet.BranchState => {
+    console.error(`branch ${c}/${attr}: ${fleet.message(e)}`);
+    return { base: null, tip: null, commits: [], tipRun: undefined };
+  });
+  const rendered = await fleet.renderDraft(ctx, c, attr, branch);
   return {
     campaign,
     task,
@@ -105,7 +100,8 @@ async function detail(ctx: fleet.Ctx, c: string, attr: string): Promise<TaskDeta
     lint,
     campaign_words: await fleet.campaignWords(ctx, c),
     publish_log: await fleet.readPublishLog(ctx, c, attr),
-    commit_problems: problems,
+    commit_problems: fleet.commitProblems(branch.commits),
+    clean: task.worktree === null || (await fleet.isClean(task.worktree).catch(() => false)),
   };
 }
 
@@ -187,9 +183,9 @@ export function app(ctx: fleet.Ctx): Hono {
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/log", (c) => text(c, run(c, "log.txt")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/prompt", (c) => text(c, run(c, "prompt.md")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/reply", (c) => text(c, run(c, "reply.md")));
-  api.get("/api/campaigns/:c/tasks/:attr/runs/:id/diff", (c) => text(c, run(c, "diff.patch")));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/description", (c) => text(c, run(c, "description.md")));
-  api.get("/api/campaigns/:c/tasks/:attr/runs/:id/commits", async (c) => c.json(await fleet.runCommits(ctx, p(c).c, p(c).attr, p(c).id)));
+  api.get("/api/campaigns/:c/tasks/:attr/commits", async (c) => c.json(await fleet.branchCommits(ctx, await fleet.readCampaign(ctx, p(c).c), p(c).attr)));
+  api.get("/api/campaigns/:c/tasks/:attr/diff", async (c) => c.text(await fleet.branchDiff(ctx, await fleet.readCampaign(ctx, p(c).c), p(c).attr)));
   api.get("/api/campaigns/:c/tasks/:attr/runs/:id/checks/:name", async (c) => {
     const check = (await fleet.readCampaign(ctx, p(c).c)).checks.find((x) => x.name === c.req.param("name"));
     if (check === undefined) fail(404, `the campaign ${p(c).c} has no check ${c.req.param("name")}`);
@@ -245,7 +241,7 @@ export function app(ctx: fleet.Ctx): Hono {
     return c.json(await detail(ctx, p(c).c, p(c).attr));
   });
   api.post("/api/campaigns/:c/tasks/:attr/draft", async (c) => {
-    await fleet.draftFromRun(ctx, p(c).c, p(c).attr, (await body(c, DraftFromRunSchema)).run);
+    await fleet.makeDraft(ctx, p(c).c, p(c).attr);
     return c.json(await detail(ctx, p(c).c, p(c).attr), 201);
   });
   api.post("/api/campaigns/:c/tasks/:attr/pr", async (c) => {

@@ -37,12 +37,13 @@ function Remark({ text }: { text: string }) {
   );
 }
 
-export function RunBadges({ run, status = true }: { run: Run; status?: boolean }) {
+/** The status, the tags and the lint of a run, and the checks: of the run, or `checks`, for example the checks of the tip. */
+export function RunBadges({ run, checks = run.checks, status = true }: { run: Run; checks?: Run["checks"]; status?: boolean }) {
   return (
     <span className="task-checks">
       {status && <StatusBadge status={run.status} />}
       <TagBadges tags={run.tags} />
-      {run.checks.map((c) => (
+      {checks.map((c) => (
         <StatusBadge key={c.name} status={c.status} title={`${c.name}: ${c.status}`}>
           {c.name}
         </StatusBadge>

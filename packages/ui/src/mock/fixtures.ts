@@ -1,5 +1,5 @@
 /** Data for the stories. Each time is some minutes before the start of the story. */
-import type { Campaign, CheckResult, Commit, CommitProblems, JobStatus, Label, LintResult, Pr, Run, RunCommits, SettingsView, TaskState, TaskView } from "@patchix/common";
+import type { Campaign, CheckResult, Commit, CommitProblems, JobStatus, Label, LintResult, Pr, Run, SettingsView, TaskState, TaskView } from "@patchix/common";
 
 export function at(minutesAgo: number): string {
   return new Date(Date.now() - minutesAgo * 60_000).toISOString();
@@ -68,7 +68,6 @@ export function okRun(attr: string, minutesAgo: number, p: Partial<Run> = {}): R
     head: HEAD,
     commits: 1,
     checks: [pass("harness", 412.4), pass("build", 95.2)],
-    checks_of: null,
     lint: 0,
     error: null,
     ...p,
@@ -77,9 +76,9 @@ export function okRun(attr: string, minutesAgo: number, p: Partial<Run> = {}): R
 
 export const QUESTION = "Does the package also read the bundle at run time?";
 
-/** A run with a question that did not move the tip of the branch. The checks of the run that started 20 minutes before it apply. */
+/** A run with a question that did not move the tip of the branch: it has no checks. A previous run of the tip has them. */
 export function questionRun(attr: string, minutesAgo: number): Run {
-  return okRun(attr, minutesAgo, { question: QUESTION, finished: at(minutesAgo - 2), checks: [], checks_of: idAt(minutesAgo + 20), lint: null });
+  return okRun(attr, minutesAgo, { question: QUESTION, finished: at(minutesAgo - 2), checks: [], lint: null });
 }
 
 /** A run that did not complete: the command of the harness stopped with an error. */
@@ -143,11 +142,10 @@ export function task(attr: string, p: Partial<TaskView> = {}): TaskView {
   };
 }
 
-export function prMeta(attr: string, run: string, p: Partial<Pr> = {}): Pr {
+export function prMeta(attr: string, p: Partial<Pr> = {}): Pr {
   return {
     title: `${attr}: use the CA bundle of cacert`,
     labels: ["1.severity: security"],
-    run,
     words: ["wassima"],
     number: null,
     url: null,
@@ -276,20 +274,14 @@ export function logLines(attr: string): string[] {
 /** The tip of the branch after a person changed the commit of the run in the worktree, for example with `git commit --amend`. */
 export const AMENDED = "5b4a3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b";
 
-/** One commit of a run, as `git show` gives it. */
-function commit(attr: string, sha: string, body: string): Commit {
+/**
+ * The commits of the branch with the tip `tip`, as `git log <base>..<tip>` and `git show` give them. The commit that a
+ * person changed has a longer message.
+ */
+export function commits(attr: string, tip: string): Commit[] {
   const subject = `${attr}: use the CA bundle of cacert`;
-  return { sha, subject, message: `${subject}\n\n${body}Assisted-by: Claude Code (Claude Opus 5.5) with patchix`, patch: diff(attr) };
-}
-
-/** The commits of a run with a head, as `git log <base>..<head>` and `git show` give them. */
-export function commits(attr: string): RunCommits {
-  return { commits: [commit(attr, HEAD, "")], head: HEAD, moved: false };
-}
-
-/** The commits of the newest run after a person changed its commit: the list ends at the tip of the branch. */
-export function movedCommits(attr: string, tip: string): RunCommits {
-  return { commits: [commit(attr, tip, "The symlink replaces the bundle of the package.\n\n")], head: tip, moved: true };
+  const body = tip === HEAD ? "" : "The symlink replaces the bundle of the package.\n\n";
+  return [{ sha: tip, subject, message: `${subject}\n\n${body}Assisted-by: Claude Code (Claude Opus 5.5) with patchix`, patch: diff(attr) }];
 }
 
 /** The head of the run with the `Co-Authored-By` line of Claude Code and without the `Assisted-by` line. See `TaskDetail.commit_problems`. */
@@ -440,14 +432,14 @@ export function mixedTasks(): TaskView[] {
       runs: [okRun("python3Packages.wassima", 50), failedRun("python3Packages.wassima", 120)],
       head: HEAD,
       worktree: worktreePath("python3Packages.wassima"),
-      pr_meta: prMeta("python3Packages.wassima", idAt(50)),
+      pr_meta: prMeta("python3Packages.wassima"),
     }),
     task("python3Packages.certifi-embedded", { state: "ready", runs: [okRun("python3Packages.certifi-embedded", 70, { lint: 3 })], in_issue: false }),
     task("calibre", {
       state: "pr",
       runs: [okRun("calibre", 400)],
       head: HEAD,
-      pr_meta: prMeta("calibre", idAt(400), { number: 580114, url: "https://github.com/NixOS/nixpkgs/pull/580114", created: at(300), pushed: HEAD, updated: at(300), confirmed: at(300) }),
+      pr_meta: prMeta("calibre", { number: 580114, url: "https://github.com/NixOS/nixpkgs/pull/580114", created: at(300), pushed: HEAD, updated: at(300), confirmed: at(300) }),
       paths: ["/lib/calibre/calibre/ebooks/cacert.pem", "/lib/calibre/mozilla-ca.pem"],
     }),
     task("blink-qt", {
@@ -455,7 +447,7 @@ export function mixedTasks(): TaskView[] {
       state: "merged",
       runs: [importedRun("blink-qt", 2000)],
       head: HEAD,
-      pr_meta: prMeta("blink-qt", idAt(2000), {
+      pr_meta: prMeta("blink-qt", {
         number: 577808,
         url: "https://github.com/NixOS/nixpkgs/pull/577808",
         created: at(1900),
@@ -470,7 +462,7 @@ export function mixedTasks(): TaskView[] {
       state: "closed",
       runs: [okRun("python3Packages.raven", 2500)],
       head: HEAD,
-      pr_meta: prMeta("python3Packages.raven", idAt(2500), { number: 577134, url: "https://github.com/NixOS/nixpkgs/pull/577134", created: at(2400), pushed: HEAD, updated: at(2400), state: "closed", confirmed: at(2400) }),
+      pr_meta: prMeta("python3Packages.raven", { number: 577134, url: "https://github.com/NixOS/nixpkgs/pull/577134", created: at(2400), pushed: HEAD, updated: at(2400), state: "closed", confirmed: at(2400) }),
     }),
     task("electrum", { state: "todo", in_source: false, remark: "no change needed: the bundle is a test fixture" }),
     // A long remark and long `notes`. The table cuts the remark, and the `notes` go on more lines.

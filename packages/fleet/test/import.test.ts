@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
 import { branchAttrs, convertDescription, scopeWords } from "../src/import.ts";
-import { cloneBase, importBranches, listRuns, readCampaign, readDraft, readPr, readTasks, renderDraft, repoPath, runDir, taskViews, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
+import { branchDiff, branchState, cloneBase, exists, importBranches, listRuns, readCampaign, readDraft, readPr, readTasks, renderDraft, repoPath, runDir, taskViews, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
 import { mergeTasks } from "../src/sync.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" }).trim();
@@ -178,12 +178,13 @@ test("the import makes a run and a draft for each task of a branch", async () =>
   assert.deepEqual([run?.tags, run?.status, run?.base, run?.head, run?.commits, run?.model], [["imported"], "ok", master, tip, 1, "claude-opus-5-5"]);
   assert.deepEqual(run?.checks.map((c) => [c.name, c.status]), [["harness", "pass"]]);
   const dir = runDir(ctx, "t", "foo", run?.id ?? "");
-  assert.match(await readFile(join(dir, "diff.patch"), "utf8"), /^\+\{ t\/foo \}$/m);
+  assert.equal(await exists(join(dir, "diff.patch")), false, "the branch has the diff, not the run");
+  assert.match(await branchDiff(ctx, await readCampaign(ctx, "t"), "foo"), /^\+\{ t\/foo \}$/m);
   assert.match(await readFile(join(dir, "log.txt"), "utf8"), new RegExp(`import of the branch t/foo \\(${tip}\\) from ${url}`));
   assert.equal(await readFile(join(dir, "checks", "harness.txt"), "utf8"), "$ harness foo\nVERDICT foo emudhra: FIXED\n");
 
   const pr = await readPr(ctx, "t", "foo");
-  assert.deepEqual([pr?.title, pr?.labels, pr?.words, pr?.number, pr?.url, pr?.state, pr?.run], ["foo: use cacert bundle", ["1.severity: security"], ["castore"], 577, "https://github.com/NixOS/nixpkgs/pull/577", "open", run?.id]);
+  assert.deepEqual([pr?.title, pr?.labels, pr?.words, pr?.number, pr?.url, pr?.state], ["foo: use cacert bundle", ["1.severity: security"], ["castore"], 577, "https://github.com/NixOS/nixpkgs/pull/577", "open"]);
   assert.deepEqual((await renderDraft(ctx, "t", "foo"))?.problems, [], "the marks of the draft have no problem");
   const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
   assert.match(rendered, /harness foo --pr 577/);
@@ -193,6 +194,8 @@ test("the import makes a run and a draft for each task of a branch", async () =>
 
   assert.equal(await readDraft(ctx, "t", "pkgs.b"), await readDraft(ctx, "t", "pkgs.a"), "shared.md is the description of the two tasks");
   assert.deepEqual((await readPr(ctx, "t", "pkgs.b"))?.words, ["gem"]);
+  assert.equal((await readPr(ctx, "t", "pkgs.a"))?.title, "pkgs.{a,b}: use cacert bundle", "the title comes from the tip of the branch of the task");
+  assert.deepEqual((await branchState(ctx, await readCampaign(ctx, "t"), "pkgs.a")).tipRun?.tags, ["imported"], "the imported run has the checks of the tip");
   assert.equal((await readPr(ctx, "t", "pkgs.b"))?.number, null);
   assert.equal(await readDraft(ctx, "t", "foo2"), await readDraft(ctx, "t", "foo"), "foo.md is the file of the branch suffix");
   assert.deepEqual((await readTasks(ctx, "t"))?.tasks.map((t) => [t.attr, t.branch]), [["foo", null], ["pkgs.a", "t/pkgs.a-b"], ["pkgs.b", "t/pkgs.a-b"], ["foo2", "t/foo"]]);

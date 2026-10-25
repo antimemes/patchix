@@ -1,6 +1,6 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
-import { publishable } from "@patchix/common/status";
+import { tipProblem, tipRun } from "@patchix/common/status";
 import type { Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
@@ -27,6 +27,8 @@ export interface MockCampaign {
    * The fork rejects a push without `force`. See `PublishInput.force`.
    */
   rejected?: string[];
+  /** The tasks with a worktree with changes without a commit. See `TaskDetail.clean`. */
+  dirty?: string[];
   /** The labels of the issue repository. The default is `LABELS`. */
   labels?: Label[];
 }
@@ -59,6 +61,7 @@ interface State {
   publishLogs: Map<string, string>;
   commitProblems: Map<string, CommitProblems[]>;
   rejected: Set<string>;
+  dirty: Set<string>;
   labels: Label[];
 }
 
@@ -79,6 +82,7 @@ export function mockClient(options: MockOptions): Client {
       publishLogs: new Map(Object.entries(m.publishLogs ?? {})),
       commitProblems: new Map(Object.entries(m.commitProblems ?? {})),
       rejected: new Set(m.rejected ?? []),
+      dirty: new Set(m.dirty ?? []),
       labels: m.labels ?? f.LABELS,
     });
   }
@@ -112,9 +116,11 @@ export function mockClient(options: MockOptions): Client {
     const rendered = draft === null || t.pr_meta === null ? null : f.fakeRender(draft, attr, t.pr_meta.number);
     const lint = draft === null ? null : f.fakeLint(draft);
     const marks = draft === null ? [] : f.fakeMarkProblems(draft, s.campaign);
-    return { campaign: s.campaign, task: t, question: s.questions.get(attr) ?? null, draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [] };
+    return { campaign: s.campaign, task: t, question: s.questions.get(attr) ?? null, draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [], clean: !s.dirty.has(attr) };
   }
   const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, tasks: s.tasks });
+  /** The commits of the branch of the task: none without a tip or without a run with a base, as the server. */
+  const branchOf = (t: TaskView) => (t.head === null || !t.runs.some((r) => r.base !== "") ? [] : f.commits(t.attr, t.head));
 
   /** As the runner: the run gets the question of the task. */
   function startRun(s: State, attr: string) {
@@ -171,17 +177,11 @@ export function mockClient(options: MockOptions): Client {
         if (run.status === "wontfix") return file === "description" ? f.NO_FIX_DESCRIPTION : fail(404, "the run has no such file");
         // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
         if (run.status === "running" || run.head === null || (file === "description" && run.question !== null)) fail(404, "the run has no such file");
-        return file === "diff" ? f.diff(attr) : f.description(attr);
+        return f.description(attr);
       }),
-    commits: (c, attr, id) =>
-      answer("commits", () => {
-        const t = taskOf(state(c), attr);
-        const run = t.runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
-        // As the server: the list of the newest run ends at the tip of the branch. See `RunCommitsSchema`.
-        const tip = t.runs[0]?.id === id && run.status !== "running" ? t.head : null;
-        if (run.head !== null && tip !== null && tip !== run.head) return f.movedCommits(attr, tip);
-        return run.head === null ? { commits: [], head: null, moved: false } : f.commits(attr);
-      }),
+    // As the server: the branch goes from the base of the newest run with a base to the tip. See `branchState`.
+    commits: (c, attr) => answer("commits", () => branchOf(taskOf(state(c), attr))),
+    diff: (c, attr) => answer("diff", () => (branchOf(taskOf(state(c), attr)).length === 0 ? "" : f.diff(attr))),
     checkOutput: (c, attr, id, check) =>
       answer("checkOutput", () => {
         const run = taskOf(state(c), attr).runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
@@ -256,14 +256,14 @@ export function mockClient(options: MockOptions): Client {
         changed(s, attr);
         return detail(s, attr);
       }),
-    draftFromRun: (c, attr, input) =>
-      answer("draftFromRun", () => {
+    makeDraft: (c, attr) =>
+      answer("makeDraft", () => {
         const s = state(c);
         const t = taskOf(s, attr);
-        const run = t.runs.find((r) => r.id === input.run) ?? fail(404, `no run ${input.run}`);
-        if (!publishable(run)) fail(400, `the run ${run.id} is ${run.status}, not ok or unverified`);
-        const old = t.pr_meta;
-        t.pr_meta = f.prMeta(attr, run.id, old === null ? {} : { number: old.number, url: old.url, created: old.created, pushed: old.pushed, updated: old.updated, state: old.state, merged: old.merged, confirmed: old.confirmed });
+        // As the server: the newest run with a description that is not `wontfix`. A run of the mock with a head has a description.
+        if (!t.runs.some((r) => r.head !== null && r.status !== "wontfix" && r.status !== "running")) fail(409, "no run of the task has a description.md");
+        const fresh = f.prMeta(attr);
+        t.pr_meta = t.pr_meta === null ? fresh : { ...t.pr_meta, title: fresh.title, words: fresh.words };
         s.drafts.set(attr, f.roughDescription(attr));
         changed(s, attr);
         return detail(s, attr);
@@ -287,8 +287,10 @@ export function mockClient(options: MockOptions): Client {
       if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
       const job = s.jobs.find((j) => j.attr === attr);
       if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the run ${job.id}`);
-      const run = t.runs[0];
-      if (!publishable(run)) fail(409, `the newest run of ${attr} is not ok or unverified`);
+      if (branchOf(t).length === 0) fail(409, `the branch of ${attr} has no commits after its base`);
+      const tip = tipProblem(tipRun(t.runs, t.head));
+      if (tip !== null) fail(409, tip);
+      if (s.dirty.has(attr)) fail(409, `the worktree of ${attr} has changes without a commit: the branch does not have them`);
       const problems = s.commitProblems.get(attr) ?? [];
       if (problems.length > 0) fail(409, `the branch does not agree with the automation/AI policy of nixpkgs: ${problems.map((p) => `commit ${p.sha.slice(0, 12)}: ${p.problems.join(", ")}`).join("; ")}`);
       const number = meta.number ?? 580201;
@@ -305,7 +307,7 @@ export function mockClient(options: MockOptions): Client {
       if (rejected) throw new ApiError(500, f.rejectedPushError(attr), { error: f.rejectedPushError(attr), publish_log: log });
       s.rejected.delete(attr);
       const now = new Date().toISOString();
-      t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: run?.head ?? null, confirmed: now };
+      t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: t.head, confirmed: now };
       t.state = "pr";
       changed(s, attr);
       return structuredClone(detail(s, attr));

@@ -8,10 +8,10 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Campaign, CheckResult, Run, Task } from "@patchix/common";
+import { tipRun, type Campaign, type CheckResult, type Run, type Task } from "@patchix/common";
 import { checkCommand, runChecks } from "./checks.ts";
 import { claudeBin, runClaude, TOOLS } from "./claude.ts";
-import { addWorktree, baseTip, diff, isClean, revParse } from "./git.ts";
+import { addWorktree, baseTip, isClean, revParse } from "./git.ts";
 import { lintText } from "./lint.ts";
 import { describe, type StartResult } from "./proc.ts";
 import { campaignDir, fail, listRuns, message, newId, now, readCampaign, readSettings, readTask, readText, runDir, takeQuestion, taskDir, taskJob, writeRun, type Ctx } from "./store.ts";
@@ -96,7 +96,7 @@ export async function startRun(ctx: Ctx, name: string, attr: string, signal?: Ab
   const id = await newId(join(taskDir(ctx, name, attr), "runs"));
   const dir = runDir(ctx, name, attr, id);
   const question = await takeQuestion(ctx, name, attr, id);
-  const run: Run = { id, attr, tags: [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], checks_of: null, lint: null, error: null };
+  const run: Run = { id, attr, tags: [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
   await writeRun(ctx, name, run);
   const out = createWriteStream(join(dir, "log.txt"), { flags: "a" });
   out.on("error", () => undefined);
@@ -158,27 +158,20 @@ async function execute(ctx: Ctx, campaign: Campaign, task: Task, first: Run, dir
     wontfix = completed && tip === start && clean && description !== null && isNoFix(description);
     const head = tip !== null && tip !== base && !wontfix ? tip : null;
     run = { ...run, commits: head === null ? 0 : 1, head };
-    if (head !== null) await writeFile(join(dir, "diff.patch"), await diff(wt.path, base, head));
     if (!clean) problems.push("the worktree has changes without a commit");
     else if (head === null && !wontfix) problems.push("no commit");
     // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
     if (description === null && run.question === null) problems.push("no description.md");
 
     // The checks examine the commit. With a problem of the work, there is no commit to examine, or the worktree has changes that the commit does not have.
+    // A run with a question that did not move the tip has no checks when a previous run has the checks of the tip. See `tipRun`.
     let checks: CheckResult[] = [];
-    if (errors.length === 0 && problems.length === 0 && !wontfix && !signal?.aborted) {
-      // A run with a question that did not move the tip uses the checks of a previous run of that tip. See `RunSchema.checks_of`.
-      const applied = run.question !== null && tip === start ? earlier.find((r) => r.checks.length > 0 && r.head === tip) : undefined;
-      if (applied === undefined) {
-        await writeRun(ctx, campaign.name, run);
-        checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base, root: ctx.root }, signal, log });
-      } else {
-        log(`the checks of the run ${applied.id} apply: the branch did not change`);
-        run = { ...run, checks_of: applied.id };
-      }
-      const results = applied?.checks ?? checks;
-      for (const c of results) if (c.status === "error") errors.push(`check ${c.name}: error`);
-      unverified = results.some((c) => c.status === "fail");
+    if (run.question !== null && tip === start && tipRun(earlier, tip) !== undefined) log("the tip of the branch did not move, and a previous run has its checks: no checks");
+    else if (errors.length === 0 && problems.length === 0 && !wontfix && !signal?.aborted) {
+      await writeRun(ctx, campaign.name, run);
+      checks = await runChecks(campaign, { cwd: wt.path, dir, values: { attr: task.attr, base, after: head ?? base, root: ctx.root }, signal, log });
+      for (const c of checks) if (c.status === "error") errors.push(`check ${c.name}: error`);
+      unverified = checks.some((c) => c.status === "fail");
     }
     run = { ...run, checks };
   } catch (e) {

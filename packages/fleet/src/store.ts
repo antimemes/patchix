@@ -14,6 +14,8 @@ import {
   RunSchema,
   SettingsSchema,
   TasksFileSchema,
+  tipProblem,
+  tipRun,
   type Campaign,
   type Fleet,
   type JobStatus,
@@ -475,27 +477,21 @@ export async function campaignWords(ctx: Ctx, c: string): Promise<string[]> {
 }
 
 /**
- * The state of a task. See `TaskStateSchema`. The runs are the newest first. The pull request of the draft is first,
- * then the issue entry when patchix has no draft, then the newest run.
+ * The state of a task. See `TaskStateSchema`. The runs are the newest first, and `tip` is the commit of the branch. The
+ * pull request of the draft is first, then the issue entry when patchix has no draft, then the newest run. When the
+ * newest run is `ok` or `unverified`, the checks of the tip give the state: see `tipRun`.
  */
-export function taskState(task: Task, runs: readonly Run[], pr: Pr | null): TaskState {
+export function taskState(task: Task, runs: readonly Run[], pr: Pr | null, tip: string | null): TaskState {
   if (pr !== null && pr.number !== null) return pr.state === "open" ? "pr" : pr.state;
   if (pr === null && (task.checked || task.pr !== null)) return "external";
-  switch (runs[0]?.status) {
-    case "running":
-      return "running";
-    case "ok":
-      return "ready";
-    case "unverified":
-      return "unverified";
-    case "wontfix":
-      return "wontfix";
-    case "failed":
-    case "stopped":
-      return "failed";
-    default:
-      return "todo";
-  }
+  const status = runs[0]?.status;
+  if (status === undefined) return "todo";
+  if (status === "running" || status === "wontfix") return status;
+  if (status === "failed" || status === "stopped") return "failed";
+  const checked = tipRun(runs, tip);
+  if (checked === undefined) return "unverified";
+  if (tipProblem(checked) !== null) return "failed";
+  return checked.checks.every((c) => c.status === "pass") ? "ready" : "unverified";
 }
 
 async function view(ctx: Ctx, campaign: Campaign, task: Task, refs: ReadonlyMap<string, string>): Promise<TaskView> {
@@ -503,11 +499,12 @@ async function view(ctx: Ctx, campaign: Campaign, task: Task, refs: ReadonlyMap<
   const pr = await readPr(ctx, campaign.name, task.attr);
   const worktree = worktreePath(ctx, campaign, task.attr);
   const branch = branchOf(campaign, task);
+  const head = refs.get(branch) ?? null;
   return {
     ...task,
-    state: taskState(task, runs, pr),
+    state: taskState(task, runs, pr, head),
     branch_name: branch,
-    head: refs.get(branch) ?? null,
+    head,
     runs,
     pr_meta: pr,
     worktree: (await exists(worktree)) ? worktree : null,

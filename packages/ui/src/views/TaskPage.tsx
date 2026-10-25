@@ -13,7 +13,7 @@ import { useClient } from "../client.tsx";
 import { ago, pullUrl, short, time } from "../format.ts";
 import { useAction, useDebounced, useLoad, useSignals } from "../hooks.ts";
 import { PublishTab } from "./PublishTab.tsx";
-import { RunsSection } from "./RunsSection.tsx";
+import { BranchSection, RunsSection } from "./RunsSection.tsx";
 import { PrCell } from "./shared.tsx";
 import "./views.css";
 
@@ -135,6 +135,7 @@ export function TaskPage({ campaign: c, attr }: { campaign: string; attr: string
                   <WorktreeRow campaign={c} task={task} onDetail={detail.replace} onChanged={detail.reload} />
                 </section>
                 <CommitProblemsNotice problems={detail.data.commit_problems} />
+                <BranchSection campaign={campaign} task={task} clean={detail.data.clean} />
                 <RunsSection campaign={campaign} task={task} queued={place >= 0} question={detail.data.question} />
               </div>
             ),

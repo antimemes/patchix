@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Campaign, TaskState, TaskView } from "@patchix/common";
+import { tipRun } from "@patchix/common/status";
 import { Badge, STATE_TONE, StateChip } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
 import { Checkbox } from "../components/Checkbox.tsx";
@@ -206,7 +207,7 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
                 <th>State</th>
                 <th>PR</th>
                 <th className="num">Runs</th>
-                <th>Newest run</th>
+                <th>Newest run, checks of the tip</th>
                 <th>Last run</th>
                 <th>Worktree</th>
                 <th>
@@ -292,7 +293,7 @@ function TaskRow({ campaign, task, selected, onSelect, busy, queued, starting, o
         {run === undefined ? (
           <span className="muted">—</span>
         ) : (
-          <RunBadges run={run} />
+          <RunBadges run={run} checks={tipRun(task.runs, task.head)?.checks ?? []} />
         )}
       </td>
       <td className="nowrap">

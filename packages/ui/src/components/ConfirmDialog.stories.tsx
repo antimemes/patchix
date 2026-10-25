@@ -27,9 +27,9 @@ export const Primary: Story = {
   args: {
     defaultOpen: true,
     variant: "primary",
-    trigger: <Button size="sm">Make draft from run 20261023-210000</Button>,
+    trigger: <Button size="sm">Make draft again</Button>,
     title: "Replace the draft?",
-    description: "The new draft replaces the title, the description and the extra words. The labels and the pull request number stay.",
+    description: "The new draft gets the description of the newest run with a description, and the title of the tip of the branch. The labels and the pull request number stay.",
     confirmLabel: "Replace",
   },
 };

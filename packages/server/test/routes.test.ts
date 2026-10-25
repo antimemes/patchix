@@ -1,10 +1,10 @@
 /**
- * The routes on a temporary root. No route of this test pushes, uses GitHub or makes a worktree: the root has no git
- * repository, thus `git push` cannot start. Only the last test makes a repository, without the remote `fork`. A test script operates as `zellij`: it records its arguments, gives
- * the names of the tabs and does not start a process. For the tab of a fleet, it writes `fleet.yaml` with
- * `PATCHIX_TEST_FLEET_PID`. Other test scripts operate as `gh` for the `labels` and the `refresh` routes. A runner
- * or a fleet of a test is a process with the words `run t <attr>` or `fleet t` in its command line:
- * see `alive`.
+ * The routes on a temporary root. No route of this test pushes or uses GitHub. The repository of patchix has the
+ * branch `t/foo` with one commit, and the remote `fork` is a directory that is not there: thus `git push` gives an
+ * error. A test script operates as `zellij`: it records its arguments, gives the names of the tabs and does not start a
+ * process. For the tab of a fleet, it writes `fleet.yaml` with `PATCHIX_TEST_FLEET_PID`. Other test scripts operate as
+ * `gh` for the `labels` and the `refresh` routes. A runner or a fleet of a test is a process with the words
+ * `run t <attr>` or `fleet t` in its command line: see `alive`.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -13,7 +13,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { CampaignSummarySchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, RunCommitsSchema, SettingsViewSchema, TaskDetailSchema, type Run } from "@patchix/common";
+import { CampaignSummarySchema, CommitSchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, SettingsViewSchema, TaskDetailSchema, type CheckResult, type Run } from "@patchix/common";
 import { parseIssueTasks } from "@patchix/fleet";
 import { checkFile, exists, questionFile, runDir, writeDraft, writePr, writeRun, writeTasks, type Ctx } from "@patchix/fleet";
 import type { Hono } from "hono";
@@ -24,8 +24,17 @@ let tmp = "";
 let ctx: Ctx;
 let api: Hono;
 let calls = "";
+/** The checkout that makes the commits, the repository of patchix, the base commit and the tip of `t/foo`. */
+let work = "";
+let repo = "";
+let base = "";
+let tip = "";
 const RUN = "20260101-000000";
-const run = (attr: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, attr, tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], checks_of: null, lint: 0, error: null });
+const run = (attr: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, attr, tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], lint: 0, error: null });
+/** The check `harness` with the status `status`. */
+const harness = (status: CheckResult["status"]): CheckResult => ({ name: "harness", status, code: status === "error" ? 1 : 0, seconds: 1 });
+const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
+const ASSISTED = "Assisted-by: Claude Code (Claude Opus 5.5) with patchix";
 
 /** A process with the words of `marker` in its command line. */
 async function marker(words: string) {
@@ -46,7 +55,21 @@ before(async () => {
   await writeFile(join(ctx.data, "settings.yaml"), "fork: someone\nconcurrency: 2\n");
   await writeFile(join(ctx.root, "campaigns", "t", "memelint.toml"), 'check = true\nprofile = "strict"\nwords = ["patchix"]\n');
   await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **foo** — `/a`\n- [x] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n") });
-  await writeRun(ctx, "t", { ...run("foo", RUN, "ok", null), finished: "f" });
+  work = join(tmp, "work");
+  repo = join(ctx.data, ".cache", "nixpkgs.git");
+  execFileSync("git", ["init", "-q", "-b", "master", work]);
+  await writeFile(join(work, "a.nix"), "{ }\n");
+  g("add", ".");
+  g("commit", "-q", "-m", "base");
+  base = g("rev-parse", "HEAD");
+  g("checkout", "-q", "-b", "t/foo");
+  await writeFile(join(work, "a.nix"), '{ ca = "cacert"; }\n');
+  g("commit", "-q", "-am", "foo: fix", "-m", ASSISTED);
+  tip = g("rev-parse", "HEAD");
+  execFileSync("git", ["clone", "-q", "--bare", work, repo]);
+  // The fork of the settings, as `forkUrl` gives it. The directory is not there.
+  execFileSync("git", ["remote", "add", "fork", "file:///nonexistent/someone/nixpkgs"], { cwd: repo });
+  await writeRun(ctx, "t", { ...run("foo", RUN, "ok", null), base, head: tip, checks: [harness("pass")], finished: "f" });
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "log.txt"), "the log\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "prompt.md"), "the prompt\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "reply.md"), "the reply\n");
@@ -54,7 +77,7 @@ before(async () => {
   await mkdir(join(runDir(ctx, "t", "foo", RUN), "checks"));
   await writeFile(checkFile(runDir(ctx, "t", "foo", RUN), "harness"), "OK\n");
   await writeDraft(ctx, "t", "foo", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
-  await writePr(ctx, "t", "foo", { title: "foo: fix", labels: [], run: RUN, words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
+  await writePr(ctx, "t", "foo", { title: "foo: fix", labels: [], words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
   calls = join(tmp, "zellij.txt");
   const zellij = join(tmp, "zellij.sh");
   const fleet = `[ "$6" = "t fleet" ] && printf 'pid: %s\\nstarted: x\\n' "$PATCHIX_TEST_FLEET_PID" > ${join(ctx.data, "state", "t", "fleet.yaml")}\n`;
@@ -82,7 +105,7 @@ test("the campaigns and their tasks", async () => {
   assert.deepEqual([list[0]?.jobs, list[0]?.queued], [0, 0]);
   const view = CampaignViewSchema.parse((await json("/api/campaigns/t")).body);
   assert.deepEqual(view.tasks.slice(0, 2).map((t) => [t.attr, t.state, t.head, t.branch_name, t.worktree, t.in_issue]), [
-    ["foo", "ready", null, "t/foo", null, true],
+    ["foo", "ready", tip, "t/foo", null, true],
     ["bar", "external", null, "t/bar", null, true],
   ]);
   assert.equal((await json("/api/campaigns/Bad")).status, 400);
@@ -102,20 +125,33 @@ test("the text files of a run", async () => {
   assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/description`)).text(), "the description\n");
   assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/harness`)).text(), "OK\n");
   assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/other`)).status, 404);
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/diff`)).status, 404);
+  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/diff`)).status, 404, "the branch has the diff, not the run");
   assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/bad/log`)).status, 400);
-  // The run has the commits `b` and `h`, and the root has no repository.
-  assert.match(((await json(`/api/campaigns/t/tasks/foo/runs/${RUN}/commits`)) as { status: number; body: { error: string } }).body.error, /does not have the commit b of the run/);
-  await writeRun(ctx, "t", { ...run("bar", "20260101-000009", "failed", null), head: null, finished: "f" });
-  assert.deepEqual(RunCommitsSchema.parse((await json("/api/campaigns/t/tasks/bar/runs/20260101-000009/commits")).body), { commits: [], head: null, moved: false }, "a run without a head");
+});
+
+test("the commits and the diff of the branch, from the base of the newest run with a base to the tip", async () => {
+  const commits = CommitSchema.array().parse((await json("/api/campaigns/t/tasks/foo/commits")).body);
+  assert.deepEqual(commits.map((c) => [c.sha, c.subject, c.message]), [[tip, "foo: fix", `foo: fix\n\n${ASSISTED}`]]);
+  assert.match(commits[0]?.patch ?? "", /^diff --git a\/a\.nix b\/a\.nix\n[^]*\n-\{ \}\n\+\{ ca = "cacert"; \}\n$/);
+  const diff = await api.request("/api/campaigns/t/tasks/foo/diff");
+  assert.match(diff.headers.get("Content-Type") ?? "", /^text\/plain/);
+  assert.equal(await diff.text(), commits[0]?.patch, "one commit: the diff of the branch is the patch of the commit");
+  // A run that did not start has no base: the newest run with a base gives it.
+  await writeRun(ctx, "t", { ...run("foo", "20260101-000001", "failed", null), base: "", head: null, finished: "f" });
+  assert.equal((await (await api.request("/api/campaigns/t/tasks/foo/diff")).text()), commits[0]?.patch);
+  await rm(runDir(ctx, "t", "foo", "20260101-000001"), { recursive: true });
+  const none = [CommitSchema.array().parse((await json("/api/campaigns/t/tasks/baz/commits")).body), await (await api.request("/api/campaigns/t/tasks/baz/diff")).text()];
+  assert.deepEqual(none, [[], ""], "no run and no branch");
 });
 
 test("the draft, the lint and the conditions of the pull request", async () => {
   const first = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
   assert.equal(first.campaign.name, "t");
   assert.equal(first.question, null);
+  // The models come from the `Assisted-by` lines of the commits, and the check output from the run of the tip.
   assert.match(first.rendered ?? "", /Claude Code used Claude Opus 5\.5\. This pull request description[^\n]*I established confidence in this output: by manual review/);
-  assert.deepEqual(first.campaign_words, ["patchix"]);
+  assert.match(first.rendered ?? "", /<summary>Output of harness: foo<\/summary>\n\n```console\nOK\n```/);
+  assert.deepEqual([first.campaign_words, first.commit_problems, first.clean], [["patchix"], [], true]);
   assert.deepEqual(first.lint?.findings, []);
   assert.deepEqual(first.mark_problems, []);
   assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/bar")).body).mark_problems, [], "no draft");
@@ -131,11 +167,11 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).publish_log, null);
   assert.equal((await json("/api/campaigns/t/tasks/foo/publish-log")).status, 404, "no publish.log");
 
-  // The conditions agree, thus `createOrUpdatePr` starts `git push`. It cannot start: the root has no repository.
+  // The conditions agree, thus `createOrUpdatePr` starts `git push`. The fork is not there: the push gives an error.
   const failed = await json("/api/campaigns/t/tasks/foo/pr", confirm);
   assert.equal(failed.status, 500);
   const error = PublishErrorSchema.parse(failed.body);
-  assert.match(error.publish_log ?? "", /^# publish of t\/foo, [^\n]+\n\$ git push fork t\/foo\n\[cannot start git: [^\n]+\]\nerror: cannot start git: [^\n]+\n$/);
+  assert.match(error.publish_log ?? "", /^# publish of t\/foo, [^\n]+\n\$ git push fork t\/foo\n[^]*\n\[exit code \d+\]\n$/);
   const logged = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
   assert.equal(logged.publish_log, error.publish_log, "publish.log");
   assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), error.publish_log, "the route of publish.log");
@@ -144,15 +180,36 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   const forced = await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: true, force: true }));
   assert.match(PublishErrorSchema.parse(forced.body).publish_log ?? "", /\n\$ git push --force fork t\/foo\n/);
 
-  // A newest run that is `unverified` also starts `git push`: the person examined it. A newest run that is `failed` does not.
-  await writeRun(ctx, "t", { ...run("foo", "20260101-000010", "unverified", null), finished: "f" });
+  // A check of the tip that is `fail` also starts `git push`: the person examined it. A check that is `error` does not.
+  await writeRun(ctx, "t", { ...run("foo", "20260101-000010", "unverified", null), base, head: tip, checks: [harness("fail")], finished: "f" });
   assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).task.state, "unverified");
   const unverified = await json("/api/campaigns/t/tasks/foo/pr", confirm);
   assert.equal(unverified.status, 500);
   assert.match(PublishErrorSchema.parse(unverified.body).publish_log ?? "", /\n\$ git push fork t\/foo\n/);
-  await writeRun(ctx, "t", { ...run("foo", "20260101-000011", "failed", null), finished: "f" });
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the newest run of foo is not ok or unverified", publish_log: null } });
+  await writeRun(ctx, "t", { ...run("foo", "20260101-000011", "failed", null), base, head: tip, checks: [harness("error")], finished: "f" });
+  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "a check of the tip stopped with an error: harness", publish_log: null } });
   for (const id of ["20260101-000010", "20260101-000011"]) await rm(runDir(ctx, "t", "foo", id), { recursive: true });
+
+  // A person changes the commit: no run has the checks of the new tip. A branch at its base has no commits.
+  const conditions = async () => (await json("/api/campaigns/t/tasks/foo/pr", confirm)).body;
+  g("commit", "-q", "--amend", "-m", "foo: fix by hand", "-m", ASSISTED);
+  execFileSync("git", ["push", "-q", "-f", repo, "t/foo"], { cwd: work });
+  const hand = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).task;
+  assert.deepEqual([hand.state, hand.head], ["unverified", g("rev-parse", "HEAD")]);
+  assert.deepEqual(await conditions(), { error: "the tip of the branch has no checks", publish_log: null });
+  execFileSync("git", ["update-ref", "refs/heads/t/foo", base], { cwd: repo });
+  assert.deepEqual(await conditions(), { error: "the branch of foo has no commits after its base", publish_log: null });
+  execFileSync("git", ["update-ref", "refs/heads/t/foo", tip], { cwd: repo });
+  g("reset", "-q", "--hard", tip);
+
+  // The changes without a commit in the worktree are not in the branch: the pull request waits.
+  assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "POST" })).status, 200);
+  const worktree = join(ctx.data, ".cache", "worktrees", "t", "foo");
+  await writeFile(join(worktree, "a.nix"), "{ }\n");
+  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).clean, false);
+  assert.deepEqual(await conditions(), { error: "the worktree of foo has changes without a commit: the branch does not have them", publish_log: null });
+  execFileSync("git", ["checkout", "-q", "--", "."], { cwd: worktree });
+  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).body).clean, true);
 
   // A run with a question that operates is a job of the task: the pull request waits. The test does not start the push.
   const runner = await marker("run t foo");
@@ -182,6 +239,17 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), oldLog, "no command started");
   assert.equal((await json("/api/campaigns/t/tasks/bar/draft", send("PUT", draft))).status, 404, "no draft");
   assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).status, 404, "no worktree");
+
+  // The draft again: the description of the newest run with a description that is not `wontfix`, and the title of the tip.
+  const wontfix = "20260101-000012";
+  await writeRun(ctx, "t", { ...run("foo", wontfix, "wontfix", null), base, head: null, finished: "f" });
+  await writeFile(join(runDir(ctx, "t", "foo", wontfix), "description.md"), "## No small fix\n");
+  const made = await json("/api/campaigns/t/tasks/foo/draft", { method: "POST" });
+  assert.equal(made.status, 201);
+  const seeded = TaskDetailSchema.parse(made.body);
+  assert.deepEqual([seeded.draft, seeded.task.pr_meta?.title, seeded.task.pr_meta?.labels, seeded.task.pr_meta?.words], ["the description\n", "foo: fix", ["x"], []], "the labels stay");
+  await rm(runDir(ctx, "t", "foo", wontfix), { recursive: true });
+  assert.deepEqual(await json("/api/campaigns/t/tasks/bar/draft", { method: "POST" }), { status: 409, body: { error: "no run of the task has a description.md" } });
 });
 
 test("the server adds the tasks to the queue and starts the fleet in zellij", async () => {
@@ -368,29 +436,17 @@ test("the refresh writes the state of the pull request of the branch into the dr
   }
 });
 
-test("a commit of the branch without the Assisted-by line is in commit_problems, the pull request route refuses it, and the commits of the newest run follow the branch", async () => {
-  const work = join(tmp, "work");
-  const repo = join(ctx.data, ".cache", "nixpkgs.git");
-  const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
-  execFileSync("git", ["init", "-q", "-b", "master", work]);
-  g("commit", "-q", "--allow-empty", "-m", "base");
-  const base = g("rev-parse", "HEAD");
-  g("checkout", "-q", "-b", "t/qux");
+test("a commit of the branch without the Assisted-by line is in commit_problems, the pull request route refuses it, and the commits follow the branch", async () => {
+  g("checkout", "-q", "-b", "t/qux", base);
   g("commit", "-q", "--allow-empty", "-m", "qux: fix", "-m", "Co-Authored-By: Claude <noreply@anthropic.com>");
   const bad = g("rev-parse", "HEAD");
-  execFileSync("git", ["clone", "-q", "--bare", work, repo]);
+  execFileSync("git", ["push", "-q", repo, "t/qux"], { cwd: work });
   try {
-    const id = "20260101-000020";
-    const older = "20260101-000019";
-    await writeRun(ctx, "t", { ...run("qux", older, "ok", null), base, head: bad, finished: "f" });
-    await writeRun(ctx, "t", { ...run("qux", id, "ok", null), base, head: bad, finished: "f" });
-    const commits = async (runId: string) => {
-      const { commits, head, moved } = RunCommitsSchema.parse((await json(`/api/campaigns/t/tasks/qux/runs/${runId}/commits`)).body);
-      return { shas: commits.map((x) => x.sha), head, moved };
-    };
-    assert.deepEqual(await commits(id), { shas: [bad], head: bad, moved: false });
+    await writeRun(ctx, "t", { ...run("qux", "20260101-000020", "ok", null), base, head: bad, checks: [harness("pass")], finished: "f" });
+    const commits = async () => CommitSchema.array().parse((await json("/api/campaigns/t/tasks/qux/commits")).body).map((x) => x.sha);
+    assert.deepEqual(await commits(), [bad]);
     await writeDraft(ctx, "t", "qux", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
-    await writePr(ctx, "t", "qux", { title: "qux: fix", labels: [], run: id, words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
+    await writePr(ctx, "t", "qux", { title: "qux: fix", labels: [], words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
     const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
     const detail = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body);
     assert.deepEqual([detail.task.head, detail.commit_problems], [bad, [{ sha: bad, subject: "qux: fix", problems }]]);
@@ -398,13 +454,13 @@ test("a commit of the branch without the Assisted-by line is in commit_problems,
     assert.deepEqual(await json("/api/campaigns/t/tasks/qux/pr", confirm), { status: 409, body: { error, publish_log: null } });
     assert.equal((await json("/api/campaigns/t/tasks/qux/publish-log")).status, 404, "no command started");
 
-    // A person changes the commit. Then the conditions agree, and the request starts the commands.
-    g("commit", "-q", "--amend", "--allow-empty", "-m", "qux: fix", "-m", "Assisted-by: Claude Code (Claude Opus 5.5) with patchix");
+    // A person changes the commit, and a run gives the checks of the new tip. Then the conditions agree, and the request starts the commands.
+    g("commit", "-q", "--amend", "--allow-empty", "-m", "qux: fix", "-m", ASSISTED);
     execFileSync("git", ["push", "-q", "-f", repo, "t/qux"], { cwd: work });
     assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body).commit_problems, []);
     const amended = g("rev-parse", "HEAD");
-    assert.deepEqual(await commits(id), { shas: [amended], head: amended, moved: true }, "the newest run gives the tip of the branch");
-    assert.deepEqual(await commits(older), { shas: [bad], head: bad, moved: false }, "an older run gives its head");
+    assert.deepEqual(await commits(), [amended], "the commits of the tip of the branch");
+    await writeRun(ctx, "t", { ...run("qux", "20260101-000021", "ok", null), base, head: amended, checks: [harness("pass")], finished: "f" });
     const started = await json("/api/campaigns/t/tasks/qux/pr", confirm);
     assert.match(PublishErrorSchema.parse(started.body).publish_log ?? "", /^# publish of t\/qux, /);
   } finally {
