@@ -218,7 +218,7 @@ export const QuestionAnswered: Story = {
     docs: {
       description: {
         story:
-          "Work tab: a run with a question. The question is above the tabs, and the Reply tab gives the reply of the agent. The run did not move the tip of the branch: it has no checks, and the Branch section gives the checks of the earlier run of the tip.",
+          "Work tab: a run with a question. The question is above the tabs, and the Reply tab, the first tab, gives the reply of the agent as Markdown. The run did not move the tip of the branch: it has no checks, and the Branch section gives the checks of the earlier run of the tip.",
       },
     },
   },
@@ -226,8 +226,10 @@ export const QuestionAnswered: Story = {
   play: async ({ canvas, userEvent }) => {
     await canvas.findByLabelText(/^Question of run /);
     const runs = await runsSection(canvas);
-    await userEvent.click(await runs.findByRole("tab", { name: "Reply" }));
-    await runs.findByText(/The package reads the bundle one time, at import time/);
+    await expect(await runs.findByRole("tab", { name: "Reply" })).toHaveAttribute("aria-selected", "true");
+    const reply = within(await runs.findByRole("region", { name: "Reply" }));
+    await reply.findByRole("heading", { level: 2, name: "The commit" });
+    await reply.findByText(/The package reads the bundle one time, at import time/);
     await userEvent.click(runs.getByRole("tab", { name: /^Checks/ }));
     await runs.findByText(/^No checks: the run did not move the tip of the branch/);
     const section = await branchSection(canvas);

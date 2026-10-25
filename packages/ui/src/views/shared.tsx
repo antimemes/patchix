@@ -3,7 +3,9 @@ import { ApiError } from "../api.ts";
 import { Badge, StatusBadge } from "../components/Badge.tsx";
 import { CodeBlock } from "../components/CodeBlock.tsx";
 import { Link } from "../components/Link.tsx";
+import { Markdown } from "../components/Markdown.tsx";
 import { Notice } from "../components/Notice.tsx";
+import { Progress } from "../components/Progress.tsx";
 import { pullUrl } from "../format.ts";
 import { useLoad } from "../hooks.ts";
 
@@ -94,6 +96,22 @@ export function RemoteText({ label, load, loadKey, diff, wrap, empty, maxHeight 
       maxHeight={maxHeight}
     />
   );
+}
+
+/** A text file of the server as Markdown, the same renderer as the preview of the pull request. A 404 is an empty text. */
+export function RemoteMarkdown({ label, load, loadKey, empty }: Pick<RemoteTextProps, "label" | "load" | "loadKey" | "empty">) {
+  const text = useLoad(async () => {
+    try {
+      return await load();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return "";
+      throw error;
+    }
+  }, loadKey);
+  if (text.loading && text.data === null) return <Progress value={null} label={`Loading the ${label.toLowerCase()}`} />;
+  if (text.data === null) return <Notice tone="error">{text.error}</Notice>;
+  if (text.data.trim() === "") return <p className="muted">{empty}</p>;
+  return <Markdown text={text.data} aria-label={label} />;
 }
 
 /** `claude -p` writes its output when it stops. While a job operates, this text gives the zellij tab of the job. */

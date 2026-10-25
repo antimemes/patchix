@@ -409,10 +409,13 @@ Each entry of the tracking issue, with its state and the key of its branch. An e
 `;
 }
 
-/** `reply.md` of a run with a question: the `stdout` of `claude`. */
+/** `reply.md` of a run with a question: the `stdout` of `claude`, in Markdown. */
 export const REPLY = `No. The package reads the bundle one time, at import time, through \`importlib.resources\`. The symlink gives that import the path of the system bundle.
 
-The commit does not change: the description is correct.`;
+## The commit
+
+- The commit does not change.
+- The description is correct.`;
 
 /** `reply.md` of a run without a question. */
 export const RUN_REPLY = "The commit replaces the bundled copy with a symlink to the bundle of `cacert`. `description.md` gives the details.";

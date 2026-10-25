@@ -10,11 +10,11 @@ import { Tabs } from "../components/Tabs.tsx";
 import { useClient } from "../client.tsx";
 import { short, time } from "../format.ts";
 import { useLoad } from "../hooks.ts";
-import { AttachNotice, RemoteText, RunBadges, TagBadges } from "./shared.tsx";
+import { AttachNotice, RemoteMarkdown, RemoteText, RunBadges, TagBadges } from "./shared.tsx";
 import "./views.css";
 
 export type BranchTab = "commits" | "diff" | "checks";
-export type RunTab = "checks" | "prompt" | "description" | "reply";
+export type RunTab = "reply" | "checks" | "prompt" | "description";
 
 /**
  * The branch: the change that the pull request button pushes. The commits and the full diff go from the base to the
@@ -100,7 +100,7 @@ export interface RunsSectionProps {
 
 export function RunsSection({ campaign, branch, queued, question }: RunsSectionProps) {
   const [chosen, setChosen] = useState<string | null>(null);
-  const [tab, setTab] = useState<RunTab>("checks");
+  const [tab, setTab] = useState<RunTab>("reply");
   const run = branch.runs.find((r) => r.id === chosen) ?? branch.runs[0];
   return (
     <section className="panel" aria-label="Runs">
@@ -226,6 +226,11 @@ export function RunView({ campaign, branch, run, tab, onTab }: RunViewProps) {
         value={tab}
         onValueChange={onTab}
         items={[
+          {
+            value: "reply",
+            label: "Reply",
+            content: <RemoteMarkdown label="Reply" loadKey={`reply:${version}`} load={() => client.runFile(c, branch, run.id, "reply")} empty="No reply." />,
+          },
           { value: "checks", label: `Checks ${run.checks.length}`, content: <ChecksView campaign={campaign} branch={branch} run={run} /> },
           {
             value: "prompt",
@@ -241,11 +246,6 @@ export function RunView({ campaign, branch, run, tab, onTab }: RunViewProps) {
               </>
             ),
             content: <RemoteText label="Description" wrap loadKey={`description:${version}`} load={() => client.runFile(c, branch, run.id, "description")} empty="No description." />,
-          },
-          {
-            value: "reply",
-            label: "Reply",
-            content: <RemoteText label="Reply" wrap loadKey={`reply:${version}`} load={() => client.runFile(c, branch, run.id, "reply")} empty="No reply." />,
           },
         ]}
       />
