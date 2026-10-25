@@ -5,24 +5,24 @@
  */
 import { mkdirSync, watch } from "node:fs";
 import { join } from "node:path";
-import { ATTR, CAMPAIGN_NAME, type Event } from "@patchix/common";
+import { CAMPAIGN_NAME, KEY, type Event } from "@patchix/common";
 import { jobsView, message, type Ctx } from "@patchix/fleet";
 
 const DELAY_MS = 200;
 export const PING_MS = 25_000;
 
 /**
- * The campaign and the task of a path in `state/`. `view`: the files of the campaign view changed. `job`: the jobs,
+ * The campaign and the branch of a path in `state/`. `view`: the files of the campaign view changed. `job`: the jobs,
  * the queue or the fleet changed. A temporary file and `fleet.log` give `null`.
  */
-export function changeOf(path: string): { campaign: string; attr: string | null; view: boolean; job: boolean } | null {
+export function changeOf(path: string): { campaign: string; key: string | null; view: boolean; job: boolean } | null {
   const parts = path.split(/[\\/]/);
-  const [campaign = "", kind, attr = ""] = parts;
+  const [campaign = "", kind, key = ""] = parts;
   const file = parts.at(-1) ?? "";
   if (!CAMPAIGN_NAME.test(campaign) || file.endsWith(".tmp") || (parts.length === 2 && file === "fleet.log")) return null;
-  if (kind === "queue" || (parts.length === 2 && file === "fleet.yaml")) return { campaign, attr: null, view: false, job: true };
+  if (kind === "queue" || (parts.length === 2 && file === "fleet.yaml")) return { campaign, key: null, view: false, job: true };
   const job = file === "run.yaml";
-  return { campaign, attr: kind === "tasks" && ATTR.test(attr) ? attr : null, view: true, job };
+  return { campaign, key: kind === "branches" && KEY.test(key) ? key : null, view: true, job };
 }
 
 export interface Hub {
@@ -54,8 +54,8 @@ export function hub(ctx: Ctx): Hub {
   const watcher = watch(dir, { recursive: true }, (_, name) => {
     const change = changeOf(String(name ?? ""));
     if (change === null) return;
-    const { campaign, attr } = change;
-    if (change.view) later(`campaign:${campaign}/${attr ?? ""}`, () => broadcast({ type: "campaign", campaign, attr }));
+    const { campaign, key } = change;
+    if (change.view) later(`campaign:${campaign}/${key ?? ""}`, () => broadcast({ type: "campaign", campaign, key }));
     if (change.job) later(`jobs:${campaign}`, async () => broadcast({ type: "jobs", campaign, ...(await jobsView(ctx, campaign)) }));
   });
   watcher.on("error", (e) => console.error(`watch ${dir}: ${e.message}`));

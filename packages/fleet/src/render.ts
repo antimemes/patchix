@@ -3,7 +3,8 @@
  *
  * `pr.md` can contain these marks:
  * - `{{disclosure}}`: the AI disclosure block.
- * - `{{check:NAME}}`: the reviewer command of the check NAME and its output in a `<details>` block.
+ * - `{{check:NAME}}`: the reviewer command of the check NAME for each entry of the branch, in one `sh` block. Then
+ *   the output of the check for each entry, in a `<details>` block.
  * - `{{check:NAME FLAG [VALUE] FLAG [VALUE] ...}}`: the same, with the flags and their values at the end of the
  *   reviewer command, in the sequence of the mark. Each FLAG is one of the `flags` of the check NAME in
  *   `campaign.yaml` (see `Check.flags`), and the mark has each FLAG one time only. A flag with `value: true` has one
@@ -21,10 +22,11 @@ import { FLAG_VALUE, type Campaign, type Check } from "@patchix/common";
 export interface RenderInput {
   body: string;
   campaign: Campaign;
-  attr: string;
+  /** The attributes of the entries of the branch, one or more. The value of `{attr}` in the reviewer command of each. */
+  attrs: readonly string[];
   pr: number | null;
-  /** The output of each check of the run, by name. */
-  checks: ReadonlyMap<string, string>;
+  /** The output of each check of the tip, by attribute and then by check name. */
+  checks: ReadonlyMap<string, ReadonlyMap<string, string>>;
   /** The model ids that made the work, for example `claude-opus-5-5`. */
   models: readonly string[];
 }
@@ -107,14 +109,20 @@ function parseCheck(campaign: Campaign, inside: string): { check: Check; words: 
   return problems.length > 0 ? { problems } : { check, words };
 }
 
-/** The text of a correct check mark: the reviewer command with the words of the mark, and the output of the check. */
+/**
+ * The text of a correct check mark: the reviewer command with the words of the mark for each attribute. Then the output
+ * of the check for each attribute.
+ */
 function checkBlock(input: RenderInput, check: Check, words: readonly string[]): string {
-  const output = input.checks.get(check.name) ?? "<no output>";
-  const values = { attr: input.attr, pr: input.pr === null ? "<this PR>" : String(input.pr) };
+  const pr = input.pr === null ? "<this PR>" : String(input.pr);
   const lines: string[] = [];
-  if (check.reviewer) lines.push("```sh", [fill(check.reviewer, values), ...words].join(" "), "```", "");
-  const f = fence(output);
-  lines.push("<details>", `<summary>Output of ${check.name}: ${input.attr}</summary>`, "", `${f}console`, output.trimEnd(), f, "", "</details>");
+  if (check.reviewer) lines.push("```sh", ...input.attrs.map((attr) => [fill(check.reviewer ?? "", { attr, pr }), ...words].join(" ")), "```", "");
+  for (const [i, attr] of input.attrs.entries()) {
+    const output = input.checks.get(attr)?.get(check.name) ?? "<no output>";
+    const f = fence(output);
+    if (i > 0) lines.push("");
+    lines.push("<details>", `<summary>Output of ${check.name}: ${attr}</summary>`, "", `${f}console`, output.trimEnd(), f, "", "</details>");
+  }
   return lines.join("\n");
 }
 

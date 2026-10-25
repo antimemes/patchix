@@ -18,7 +18,7 @@ const UNSAFE = `<img src="data:," onerror="alert(1)" alt="an image without its f
 const meta = {
   title: "Components/Markdown",
   component: Markdown,
-  args: { "aria-label": "Preview", text: fakeRender(description("python3Packages.wassima"), "python3Packages.wassima", 580114) },
+  args: { "aria-label": "Preview", text: fakeRender(description("python3Packages.wassima"), ["python3Packages.wassima"], 580114) },
   decorators: [
     (Story) => (
       <div style={{ maxWidth: 820 }}>

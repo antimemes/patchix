@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 export type Route =
   | { page: "campaigns" }
   | { page: "campaign"; campaign: string }
-  | { page: "task"; campaign: string; attr: string }
+  | { page: "branch"; campaign: string; key: string }
   | { page: "settings" }
   | { page: "missing"; path: string };
 
@@ -41,11 +41,11 @@ function decode(part: string): string | null {
 
 export function route(path: string): Route {
   const parts = path.split("/").filter((p) => p !== "");
-  const [a, c, t, attr, ...rest] = parts.map(decode);
+  const [a, c, b, key, ...rest] = parts.map(decode);
   if (parts.length === 0) return { page: "campaigns" };
   if (a === "settings" && parts.length === 1) return { page: "settings" };
-  if (a === "c" && c && t === undefined) return { page: "campaign", campaign: c };
-  if (a === "c" && c && t === "t" && attr && rest.length === 0) return { page: "task", campaign: c, attr };
+  if (a === "c" && c && b === undefined) return { page: "campaign", campaign: c };
+  if (a === "c" && c && b === "b" && key && rest.length === 0) return { page: "branch", campaign: c, key };
   return { page: "missing", path };
 }
 
@@ -53,7 +53,9 @@ export const href = {
   home: () => "/",
   settings: () => "/settings",
   campaign: (c: string) => `/c/${encodeURIComponent(c)}`,
-  task: (c: string, attr: string) => `/c/${encodeURIComponent(c)}/t/${encodeURIComponent(attr)}`,
+  branch: (c: string, key: string) => `/c/${encodeURIComponent(c)}/b/${encodeURIComponent(key)}`,
+  /** The row of the entry in the task table of the campaign: the `q` query has the attribute. */
+  entry: (c: string, attr: string) => `/c/${encodeURIComponent(c)}?q=${encodeURIComponent(attr)}#tasks`,
 };
 
 /** The value of the query parameter `name` of the URL of the page, or "" when the URL does not have it. */

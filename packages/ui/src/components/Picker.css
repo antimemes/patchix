@@ -1,0 +1,44 @@
+.ui-picker-input {
+  min-width: 14rem;
+}
+.ui-picker-popup {
+  width: var(--anchor-width);
+  min-width: 16rem;
+  max-width: var(--available-width);
+  max-height: min(22rem, var(--available-height));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+  font-size: 13px;
+}
+.ui-picker-empty {
+  padding: 6px 10px;
+  color: var(--fg-muted);
+}
+.ui-picker-empty:empty {
+  display: none;
+}
+.ui-picker-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px;
+  cursor: default;
+  user-select: none;
+}
+.ui-picker-item[data-highlighted] {
+  background: var(--surface-2);
+}
+.ui-picker-value {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.ui-picker-hint {
+  color: var(--fg-muted);
+  font-size: 12px;
+}

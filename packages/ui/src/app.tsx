@@ -10,7 +10,7 @@ import { CampaignPage } from "./views/CampaignPage.tsx";
 import { CampaignsPage } from "./views/CampaignsPage.tsx";
 import { NotFound } from "./views/NotFound.tsx";
 import { SettingsPage } from "./views/SettingsPage.tsx";
-import { TaskPage } from "./views/TaskPage.tsx";
+import { BranchPage } from "./views/BranchPage.tsx";
 
 function crumbs(r: Route): Crumb[] {
   switch (r.page) {
@@ -18,8 +18,8 @@ function crumbs(r: Route): Crumb[] {
       return [];
     case "campaign":
       return [{ label: "Campaigns", href: href.home() }, { label: r.campaign }];
-    case "task":
-      return [{ label: "Campaigns", href: href.home() }, { label: r.campaign, href: href.campaign(r.campaign) }, { label: r.attr }];
+    case "branch":
+      return [{ label: "Campaigns", href: href.home() }, { label: r.campaign, href: href.campaign(r.campaign) }, { label: r.key }];
     case "settings":
       return [{ label: "Campaigns", href: href.home() }, { label: "Settings" }];
     case "missing":
@@ -33,8 +33,8 @@ function title(r: Route): string {
       return "patchix";
     case "campaign":
       return `${r.campaign} · patchix`;
-    case "task":
-      return `${r.attr} · ${r.campaign} · patchix`;
+    case "branch":
+      return `${r.key} · ${r.campaign} · patchix`;
     case "settings":
       return "Settings · patchix";
     case "missing":
@@ -48,8 +48,8 @@ function Page({ r }: { r: Route }) {
       return <CampaignsPage />;
     case "campaign":
       return <CampaignPage key={r.campaign} campaign={r.campaign} />;
-    case "task":
-      return <TaskPage key={`${r.campaign}/${r.attr}`} campaign={r.campaign} attr={r.attr} />;
+    case "branch":
+      return <BranchPage key={`${r.campaign}/${r.key}`} campaign={r.campaign} branch={r.key} />;
     case "settings":
       return <SettingsPage />;
     case "missing":

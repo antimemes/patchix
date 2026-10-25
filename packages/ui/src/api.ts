@@ -1,10 +1,12 @@
 /** The client of the server routes. The views get the client from `ClientProvider`, thus the stories can use a mock client. */
 import type {
+  BranchDetail,
   CampaignSummary,
   CampaignView,
   Commit,
   DraftInput,
   Event as ServerEvent,
+  FreeRunInput,
   JobInput,
   JobsView,
   Label,
@@ -12,12 +14,11 @@ import type {
   RunInput,
   Settings,
   SettingsView,
-  TaskDetail,
   Worktree,
 } from "@patchix/common";
 
 /** The text files of a run that the page shows. `log.txt` stays in the run directory and in the zellij tab. */
-export type RunFile = "prompt" | "reply" | "description";
+export type RunFile = "prompt" | "reply" | "description" | "attrs";
 /** A server event, or `reconnect` after the event stream stops and starts again. */
 export type Signal = ServerEvent | { type: "reconnect" };
 
@@ -44,30 +45,36 @@ export interface Client {
   refresh(c: string): Promise<CampaignView>;
   fetchBase(c: string): Promise<CampaignView>;
   labels(c: string): Promise<Label[]>;
-  task(c: string, attr: string): Promise<TaskDetail>;
-  runFile(c: string, attr: string, run: string, file: RunFile): Promise<string>;
-  /** The commits of the branch of the task, from its base to its tip. See `GET .../commits`. */
-  commits(c: string, attr: string): Promise<Commit[]>;
-  /** `git diff <base> <tip>` of the branch of the task, as text. */
-  diff(c: string, attr: string): Promise<string>;
-  checkOutput(c: string, attr: string, run: string, check: string): Promise<string>;
+  /** The branch of the key, with its entries and its draft. */
+  branch(c: string, key: string): Promise<BranchDetail>;
+  runFile(c: string, key: string, run: string, file: RunFile): Promise<string>;
+  /** The commits of the branch, from its base to its tip. See `GET .../commits`. */
+  commits(c: string, key: string): Promise<Commit[]>;
+  /** `git diff <base> <tip>` of the branch, as text. */
+  diff(c: string, key: string): Promise<string>;
+  /** The output of the check `check` for the attribute `attr` in the run. */
+  checkOutput(c: string, key: string, run: string, attr: string, check: string): Promise<string>;
   jobs(c: string): Promise<JobsView>;
-  /** Adds the tasks to the queue. The fleet starts their runs. */
+  /** Adds the branches to the queue. The fleet starts their runs. */
   queueRuns(c: string, input: JobInput): Promise<JobsView>;
-  /** Removes the task and its question from the queue. When the task is not in the queue, it stops the job of the task. */
-  stopJob(c: string, attr: string): Promise<JobsView>;
+  /** Removes the branch and its question from the queue. When the branch is not in the queue, it stops the job of the branch. */
+  stopJob(c: string, key: string): Promise<JobsView>;
   clearQueue(c: string): Promise<JobsView>;
-  /** Adds the task to the queue for one run, with the question of `input` or without a question. See `RunInput`. */
-  startRun(c: string, attr: string, input: RunInput): Promise<JobsView>;
-  saveDraft(c: string, attr: string, input: DraftInput): Promise<TaskDetail>;
+  /** Adds the branch to the queue for one run, with the question of `input` or without a question. See `RunInput`. */
+  startRun(c: string, key: string, input: RunInput): Promise<JobsView>;
+  /** Adds the key of `input` to the queue. A key that is not there is a free-text run: the text is necessary. See `FreeRunInput`. */
+  startFreeRun(c: string, input: FreeRunInput): Promise<JobsView>;
+  /** Links the entry to the branch of the key, or removes its link with `null`. See `PUT .../tasks/:attr/branch`. */
+  linkEntry(c: string, attr: string, key: string | null): Promise<CampaignView>;
+  saveDraft(c: string, key: string, input: DraftInput): Promise<BranchDetail>;
   /** Makes the draft from the newest run with a description and from the tip of the branch. See `makeDraft` in the fleet package. */
-  makeDraft(c: string, attr: string): Promise<TaskDetail>;
+  makeDraft(c: string, key: string): Promise<BranchDetail>;
   /** `input` shows that the person set the tick box: see `PublishInput`. */
-  createPr(c: string, attr: string, input: PublishInput): Promise<TaskDetail>;
-  /** `publish.log` of the task. While `createPr` operates, the file becomes longer. A task without the file gives an error with the status 404. */
-  publishLog(c: string, attr: string): Promise<string>;
-  makeWorktree(c: string, attr: string): Promise<Worktree>;
-  removeWorktree(c: string, attr: string): Promise<TaskDetail>;
+  createPr(c: string, key: string, input: PublishInput): Promise<BranchDetail>;
+  /** `publish.log` of the branch. While `createPr` operates, the file becomes longer. A branch without the file gives an error with the status 404. */
+  publishLog(c: string, key: string): Promise<string>;
+  makeWorktree(c: string, key: string): Promise<Worktree>;
+  removeWorktree(c: string, key: string): Promise<BranchDetail>;
   /** The settings of this person and this host: see `SettingsView`. */
   settings(): Promise<SettingsView>;
   saveSettings(input: Settings): Promise<SettingsView>;
@@ -91,7 +98,7 @@ export function httpClient(options: { base?: string } = {}): Client {
   const base = options.base ?? "";
   const s = encodeURIComponent;
   const campaign = (c: string) => `/api/campaigns/${s(c)}`;
-  const task = (c: string, attr: string) => `${campaign(c)}/tasks/${s(attr)}`;
+  const branch = (c: string, key: string) => `${campaign(c)}/branches/${s(key)}`;
 
   async function send(method: string, path: string, body?: unknown): Promise<Response> {
     const headers = new Headers();
@@ -129,22 +136,24 @@ export function httpClient(options: { base?: string } = {}): Client {
     refresh: (c) => json("POST", `${campaign(c)}/refresh`),
     fetchBase: (c) => json("POST", `${campaign(c)}/base`),
     labels: (c) => json("GET", `${campaign(c)}/labels`),
-    task: (c, attr) => json("GET", task(c, attr)),
-    runFile: (c, attr, run, file) => text(`${task(c, attr)}/runs/${s(run)}/${file}`),
-    commits: (c, attr) => json("GET", `${task(c, attr)}/commits`),
-    diff: (c, attr) => text(`${task(c, attr)}/diff`),
-    checkOutput: (c, attr, run, check) => text(`${task(c, attr)}/runs/${s(run)}/checks/${s(check)}`),
+    branch: (c, key) => json("GET", branch(c, key)),
+    runFile: (c, key, run, file) => text(`${branch(c, key)}/runs/${s(run)}/${file}`),
+    commits: (c, key) => json("GET", `${branch(c, key)}/commits`),
+    diff: (c, key) => text(`${branch(c, key)}/diff`),
+    checkOutput: (c, key, run, attr, check) => text(`${branch(c, key)}/runs/${s(run)}/checks/${s(attr)}/${s(check)}`),
     jobs: (c) => json("GET", `${campaign(c)}/jobs`),
     queueRuns: (c, input) => json("POST", `${campaign(c)}/jobs`, input),
-    stopJob: (c, attr) => json("DELETE", `${campaign(c)}/jobs/${s(attr)}`),
+    stopJob: (c, key) => json("DELETE", `${campaign(c)}/jobs/${s(key)}`),
     clearQueue: (c) => json("DELETE", `${campaign(c)}/queue`),
-    startRun: (c, attr, input) => json("POST", `${task(c, attr)}/run`, input),
-    saveDraft: (c, attr, input) => json("PUT", `${task(c, attr)}/draft`, input),
-    makeDraft: (c, attr) => json("POST", `${task(c, attr)}/draft`),
-    createPr: (c, attr, input) => json("POST", `${task(c, attr)}/pr`, input),
-    publishLog: (c, attr) => text(`${task(c, attr)}/publish-log`),
-    makeWorktree: (c, attr) => json("POST", `${task(c, attr)}/worktree`),
-    removeWorktree: (c, attr) => json("DELETE", `${task(c, attr)}/worktree`),
+    startRun: (c, key, input) => json("POST", `${branch(c, key)}/run`, input),
+    startFreeRun: (c, input) => json("POST", `${campaign(c)}/run`, input),
+    linkEntry: (c, attr, key) => json("PUT", `${campaign(c)}/tasks/${s(attr)}/branch`, { key }),
+    saveDraft: (c, key, input) => json("PUT", `${branch(c, key)}/draft`, input),
+    makeDraft: (c, key) => json("POST", `${branch(c, key)}/draft`),
+    createPr: (c, key, input) => json("POST", `${branch(c, key)}/pr`, input),
+    publishLog: (c, key) => text(`${branch(c, key)}/publish-log`),
+    makeWorktree: (c, key) => json("POST", `${branch(c, key)}/worktree`),
+    removeWorktree: (c, key) => json("DELETE", `${branch(c, key)}/worktree`),
     settings: () => json("GET", "/api/settings"),
     saveSettings: (input) => json("PUT", "/api/settings", input),
     subscribe(listener) {

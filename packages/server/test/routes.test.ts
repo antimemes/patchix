@@ -4,7 +4,7 @@
  * error. A test script operates as `zellij`: it records its arguments, gives the names of the tabs and does not start a
  * process. For the tab of a fleet, it writes `fleet.yaml` with `PATCHIX_TEST_FLEET_PID`. Other test scripts operate as
  * `gh` for the `labels` and the `refresh` routes. A runner or a fleet of a test is a process with the words
- * `run t <attr>` or `fleet t` in its command line: see `alive`.
+ * `run t <key>` or `fleet t` in its command line: see `alive`. The entry `foo` links to the branch `foo`.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -13,7 +13,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { CampaignSummarySchema, CommitSchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, SettingsViewSchema, TaskDetailSchema, type CheckResult, type Run } from "@patchix/common";
+import { BranchDetailSchema, CampaignSummarySchema, CommitSchema, CONFIRM_ERROR, CampaignViewSchema, JobsViewSchema, LabelSchema, PublishErrorSchema, SettingsViewSchema, type CheckResult, type Run } from "@patchix/common";
 import { parseIssueTasks } from "@patchix/fleet";
 import { checkFile, exists, questionFile, runDir, writeDraft, writePr, writeRun, writeTasks, type Ctx } from "@patchix/fleet";
 import type { Hono } from "hono";
@@ -30,9 +30,9 @@ let repo = "";
 let base = "";
 let tip = "";
 const RUN = "20260101-000000";
-const run = (attr: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, attr, tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], lint: 0, error: null });
-/** The check `harness` with the status `status`. */
-const harness = (status: CheckResult["status"]): CheckResult => ({ name: "harness", status, code: status === "error" ? 1 : 0, seconds: 1 });
+const run = (key: string, id: string, status: Run["status"], pid: number | null): Run => ({ id, key, attrs: [key], tags: [], question: null, started: "2026-01-01T00:00:00Z", finished: null, status, model: "claude-opus-5-5", pid, base: "b", head: "h", commits: 1, checks: [], lint: 0, error: null });
+/** The check `harness` of the attribute `attr` with the status `status`. */
+const harness = (status: CheckResult["status"], attr = "foo"): CheckResult => ({ attr, name: "harness", status, code: status === "error" ? 1 : 0, seconds: 1 });
 const g = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: work, encoding: "utf8" }).trim();
 const ASSISTED = "Assisted-by: Claude Code (Claude Opus 5.5) with patchix";
 
@@ -54,7 +54,8 @@ before(async () => {
   await mkdir(ctx.data, { recursive: true });
   await writeFile(join(ctx.data, "settings.yaml"), "fork: someone\nconcurrency: 2\n");
   await writeFile(join(ctx.root, "campaigns", "t", "memelint.toml"), 'check = true\nprofile = "strict"\nwords = ["patchix"]\n');
-  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: parseIssueTasks("- [ ] **foo** — `/a`\n- [x] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n") });
+  const tasks = parseIssueTasks("- [ ] **foo** — `/a`\n- [x] **bar** — `/b`\n- [ ] **baz** — `/c`\n- [ ] **qux** — `/d`\n");
+  await writeTasks(ctx, "t", { synced: "2026-01-01T00:00:00Z", tasks: tasks.map((t) => (t.attr === "foo" ? { ...t, branch: "foo" } : t)) });
   work = join(tmp, "work");
   repo = join(ctx.data, ".cache", "nixpkgs.git");
   execFileSync("git", ["init", "-q", "-b", "master", work]);
@@ -74,8 +75,9 @@ before(async () => {
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "prompt.md"), "the prompt\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "reply.md"), "the reply\n");
   await writeFile(join(runDir(ctx, "t", "foo", RUN), "description.md"), "the description\n");
+  await writeFile(join(runDir(ctx, "t", "foo", RUN), "attrs.txt"), "foo\n");
   await mkdir(join(runDir(ctx, "t", "foo", RUN), "checks"));
-  await writeFile(checkFile(runDir(ctx, "t", "foo", RUN), "harness"), "OK\n");
+  await writeFile(checkFile(runDir(ctx, "t", "foo", RUN), "foo", "harness"), "OK\n");
   await writeDraft(ctx, "t", "foo", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
   await writePr(ctx, "t", "foo", { title: "foo: fix", labels: [], words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
   calls = join(tmp, "zellij.txt");
@@ -99,54 +101,66 @@ const send = (method: string, body: unknown, headers: Record<string, string> = {
 /** The body of `POST .../pr`: the person set the tick box. */
 const confirm = send("POST", { confirmed: true });
 
-test("the campaigns and their tasks", async () => {
+test("the campaigns, their entries and their branches", async () => {
   const list = CampaignSummarySchema.array().parse((await json("/api/campaigns")).body);
   assert.deepEqual(list[0]?.counts, { external: 1, pr: 0, merged: 0, closed: 0, ready: 1, unverified: 0, running: 0, failed: 0, wontfix: 0, todo: 2 });
   assert.deepEqual([list[0]?.jobs, list[0]?.queued], [0, 0]);
   const view = CampaignViewSchema.parse((await json("/api/campaigns/t")).body);
-  assert.deepEqual(view.tasks.slice(0, 2).map((t) => [t.attr, t.state, t.head, t.branch_name, t.worktree, t.in_issue]), [
-    ["foo", "ready", tip, "t/foo", null, true],
-    ["bar", "external", null, "t/bar", null, true],
+  assert.deepEqual(view.tasks.map((t) => [t.attr, t.state, t.branch, t.in_issue]), [
+    ["foo", "ready", "foo", true],
+    ["bar", "external", null, true],
+    ["baz", "todo", null, true],
+    ["qux", "todo", null, true],
   ]);
+  assert.deepEqual(view.branches.map((b) => [b.key, b.state, b.head, b.name, b.worktree, b.covers, b.runs.map((r) => r.id)]), [["foo", "ready", tip, "t/foo", null, ["foo"], [RUN]]]);
   assert.equal((await json("/api/campaigns/Bad")).status, 400);
   assert.equal((await json("/api/campaigns/zzz")).status, 404);
-  assert.equal((await json("/api/campaigns/t/tasks/nope")).status, 404);
+  assert.deepEqual(await json("/api/campaigns/t/branches/nope"), { status: 404, body: { error: "no branch nope in the campaign t" } });
+  assert.equal((await json("/api/campaigns/t/tasks/nope")).status, 404, "no entry");
+  assert.deepEqual(await json("/api/campaigns/t/tasks/baz"), { status: 404, body: { error: "no branch covers the entry baz" } });
+  assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).branch.key, "foo", "the alias gives the branch of the entry");
+  // The key of an entry is a branch without runs: its page shows the entry.
+  const baz = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/baz")).body);
+  assert.deepEqual([baz.branch.state, baz.branch.covers, baz.tasks.map((t) => [t.attr, t.state])], ["todo", [], [["baz", "todo"]]]);
   assert.deepEqual((await json("/api/nothing")).body, { error: "no route GET /api/nothing" });
   assert.equal((await json("/api/campaigns/t/import", send("POST", { url: "ext::sh -c x" }))).status, 400, "only https:// and file:// URLs");
   assert.equal((await json("/api/campaigns/t/import", send("POST", { url: "file:///x", descriptions: "" }))).status, 400);
 });
 
 test("the text files of a run", async () => {
-  const log = await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/log`);
+  const log = await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/log`);
   assert.match(log.headers.get("Content-Type") ?? "", /^text\/plain/);
   assert.equal(await log.text(), "the log\n");
-  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/prompt`)).text(), "the prompt\n");
-  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/reply`)).text(), "the reply\n");
-  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/description`)).text(), "the description\n");
-  assert.equal(await (await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/harness`)).text(), "OK\n");
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/checks/other`)).status, 404);
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/${RUN}/diff`)).status, 404, "the branch has the diff, not the run");
-  assert.equal((await api.request(`/api/campaigns/t/tasks/foo/runs/bad/log`)).status, 400);
+  assert.equal(await (await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/prompt`)).text(), "the prompt\n");
+  assert.equal(await (await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/reply`)).text(), "the reply\n");
+  assert.equal(await (await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/description`)).text(), "the description\n");
+  assert.equal(await (await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/attrs`)).text(), "foo\n");
+  assert.equal(await (await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/checks/foo/harness`)).text(), "OK\n");
+  assert.equal((await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/checks/foo/other`)).status, 404);
+  assert.equal((await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/checks/bar/harness`)).status, 404, "no check of bar");
+  assert.equal((await api.request(`/api/campaigns/t/branches/foo/runs/${RUN}/diff`)).status, 404, "the branch has the diff, not the run");
+  assert.equal((await api.request(`/api/campaigns/t/branches/foo/runs/bad/log`)).status, 400);
 });
 
 test("the commits and the diff of the branch, from the base of the newest run with a base to the tip", async () => {
-  const commits = CommitSchema.array().parse((await json("/api/campaigns/t/tasks/foo/commits")).body);
+  const commits = CommitSchema.array().parse((await json("/api/campaigns/t/branches/foo/commits")).body);
   assert.deepEqual(commits.map((c) => [c.sha, c.subject, c.message]), [[tip, "foo: fix", `foo: fix\n\n${ASSISTED}`]]);
   assert.match(commits[0]?.patch ?? "", /^diff --git a\/a\.nix b\/a\.nix\n[^]*\n-\{ \}\n\+\{ ca = "cacert"; \}\n$/);
-  const diff = await api.request("/api/campaigns/t/tasks/foo/diff");
+  const diff = await api.request("/api/campaigns/t/branches/foo/diff");
   assert.match(diff.headers.get("Content-Type") ?? "", /^text\/plain/);
   assert.equal(await diff.text(), commits[0]?.patch, "one commit: the diff of the branch is the patch of the commit");
   // A run that did not start has no base: the newest run with a base gives it.
   await writeRun(ctx, "t", { ...run("foo", "20260101-000001", "failed", null), base: "", head: null, finished: "f" });
-  assert.equal((await (await api.request("/api/campaigns/t/tasks/foo/diff")).text()), commits[0]?.patch);
+  assert.equal((await (await api.request("/api/campaigns/t/branches/foo/diff")).text()), commits[0]?.patch);
   await rm(runDir(ctx, "t", "foo", "20260101-000001"), { recursive: true });
-  const none = [CommitSchema.array().parse((await json("/api/campaigns/t/tasks/baz/commits")).body), await (await api.request("/api/campaigns/t/tasks/baz/diff")).text()];
+  const none = [CommitSchema.array().parse((await json("/api/campaigns/t/branches/baz/commits")).body), await (await api.request("/api/campaigns/t/branches/baz/diff")).text()];
   assert.deepEqual(none, [[], ""], "no run and no branch");
 });
 
 test("the draft, the lint and the conditions of the pull request", async () => {
-  const first = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
+  const first = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body);
   assert.equal(first.campaign.name, "t");
+  assert.deepEqual([first.branch.key, first.branch.covers, first.tasks.map((t) => [t.attr, t.state])], ["foo", ["foo"], [["foo", "ready"]]]);
   assert.equal(first.question, null);
   // The models come from the `Assisted-by` lines of the commits, and the check output from the run of the tip.
   assert.match(first.rendered ?? "", /Claude Code used Claude Opus 5\.5\. This pull request description[^\n]*I established confidence in this output: by manual review/);
@@ -154,124 +168,124 @@ test("the draft, the lint and the conditions of the pull request", async () => {
   assert.deepEqual([first.campaign_words, first.commit_problems, first.clean], [["patchix"], [], true]);
   assert.deepEqual(first.lint?.findings, []);
   assert.deepEqual(first.mark_problems, []);
-  assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/bar")).body).mark_problems, [], "no draft");
+  assert.deepEqual(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/bar")).body).mark_problems, [], "no draft");
   assert.equal(first.publish_log, null);
-  assert.equal((await json("/api/campaigns/t/tasks/foo/review", send("PUT", { note: "x" }))).status, 404, "no review route");
-  assert.equal((await json("/api/campaigns/t/tasks/foo/lint", { method: "POST" })).status, 404, "no lint route: the GET and the PUT of the draft lint");
+  assert.equal((await json("/api/campaigns/t/branches/foo/review", send("PUT", { note: "x" }))).status, 404, "no review route");
+  assert.equal((await json("/api/campaigns/t/branches/foo/lint", { method: "POST" })).status, 404, "no lint route: the GET and the PUT of the draft lint");
 
   // When the person did not set the tick box, no command starts.
   const unconfirmed = { status: 409, body: { error: CONFIRM_ERROR, publish_log: null } };
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", { method: "POST" }), unconfirmed, "no body");
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: false })), unconfirmed);
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: "true" })), unconfirmed);
-  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).publish_log, null);
-  assert.equal((await json("/api/campaigns/t/tasks/foo/publish-log")).status, 404, "no publish.log");
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", { method: "POST" }), unconfirmed, "no body");
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", send("POST", { confirmed: false })), unconfirmed);
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", send("POST", { confirmed: "true" })), unconfirmed);
+  assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).publish_log, null);
+  assert.equal((await json("/api/campaigns/t/branches/foo/publish-log")).status, 404, "no publish.log");
 
   // The conditions agree, thus `createOrUpdatePr` starts `git push`. The fork is not there: the push gives an error.
-  const failed = await json("/api/campaigns/t/tasks/foo/pr", confirm);
+  const failed = await json("/api/campaigns/t/branches/foo/pr", confirm);
   assert.equal(failed.status, 500);
   const error = PublishErrorSchema.parse(failed.body);
   assert.match(error.publish_log ?? "", /^# publish of t\/foo, [^\n]+\n\$ git push fork t\/foo\n[^]*\n\[exit code \d+\]\n$/);
-  const logged = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body);
+  const logged = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body);
   assert.equal(logged.publish_log, error.publish_log, "publish.log");
-  assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), error.publish_log, "the route of publish.log");
-  assert.equal(logged.task.pr_meta?.confirmed, null, "a publish with an error does not record the confirmation");
+  assert.equal(await (await api.request("/api/campaigns/t/branches/foo/publish-log")).text(), error.publish_log, "the route of publish.log");
+  assert.equal(logged.branch.pr_meta?.confirmed, null, "a publish with an error does not record the confirmation");
   // With the tick box `Force push`, the push replaces the branch on the fork. The draft has no `pushed` commit.
-  const forced = await json("/api/campaigns/t/tasks/foo/pr", send("POST", { confirmed: true, force: true }));
+  const forced = await json("/api/campaigns/t/branches/foo/pr", send("POST", { confirmed: true, force: true }));
   assert.match(PublishErrorSchema.parse(forced.body).publish_log ?? "", /\n\$ git push --force fork t\/foo\n/);
 
   // A check of the tip that is `fail` also starts `git push`: the person examined it. A check that is `error` does not.
   await writeRun(ctx, "t", { ...run("foo", "20260101-000010", "unverified", null), base, head: tip, checks: [harness("fail")], finished: "f" });
-  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).task.state, "unverified");
-  const unverified = await json("/api/campaigns/t/tasks/foo/pr", confirm);
+  assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).branch.state, "unverified");
+  const unverified = await json("/api/campaigns/t/branches/foo/pr", confirm);
   assert.equal(unverified.status, 500);
   assert.match(PublishErrorSchema.parse(unverified.body).publish_log ?? "", /\n\$ git push fork t\/foo\n/);
   await writeRun(ctx, "t", { ...run("foo", "20260101-000011", "failed", null), base, head: tip, checks: [harness("error")], finished: "f" });
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "a check of the tip stopped with an error: harness", publish_log: null } });
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", confirm), { status: 409, body: { error: "a check of the tip stopped with an error: harness of foo", publish_log: null } });
   for (const id of ["20260101-000010", "20260101-000011"]) await rm(runDir(ctx, "t", "foo", id), { recursive: true });
 
   // A person changes the commit: no run has the checks of the new tip. A branch at its base has no commits.
-  const conditions = async () => (await json("/api/campaigns/t/tasks/foo/pr", confirm)).body;
+  const conditions = async () => (await json("/api/campaigns/t/branches/foo/pr", confirm)).body;
   g("commit", "-q", "--amend", "-m", "foo: fix by hand", "-m", ASSISTED);
   execFileSync("git", ["push", "-q", "-f", repo, "t/foo"], { cwd: work });
-  const hand = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).task;
+  const hand = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).branch;
   assert.deepEqual([hand.state, hand.head], ["unverified", g("rev-parse", "HEAD")]);
-  assert.deepEqual(await conditions(), { error: "the tip of the branch has no checks", publish_log: null });
+  assert.deepEqual(await conditions(), { error: "the tip of the branch has no checks for foo", publish_log: null });
   execFileSync("git", ["update-ref", "refs/heads/t/foo", base], { cwd: repo });
-  assert.deepEqual(await conditions(), { error: "the branch of foo has no commits after its base", publish_log: null });
+  assert.deepEqual(await conditions(), { error: "the branch foo has no commits after its base", publish_log: null });
   execFileSync("git", ["update-ref", "refs/heads/t/foo", tip], { cwd: repo });
   g("reset", "-q", "--hard", tip);
 
   // The changes without a commit in the worktree are not in the branch: the pull request waits.
-  assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "POST" })).status, 200);
+  assert.equal((await json("/api/campaigns/t/branches/foo/worktree", { method: "POST" })).status, 200);
   const worktree = join(ctx.data, ".cache", "worktrees", "t", "foo");
   await writeFile(join(worktree, "a.nix"), "{ }\n");
-  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).clean, false);
+  assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).clean, false);
   assert.deepEqual(await conditions(), { error: "the worktree of foo has changes without a commit: the branch does not have them", publish_log: null });
   execFileSync("git", ["checkout", "-q", "--", "."], { cwd: worktree });
-  assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).body).clean, true);
+  assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo/worktree", { method: "DELETE" })).body).clean, true);
 
   // A run with a question that operates is a job of the task: the pull request waits. The test does not start the push.
   const runner = await marker("run t foo");
   await writeRun(ctx, "t", { ...run("foo", "20260101-000005", "running", runner.pid ?? null), question: "Why?" });
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the task foo has a job that operates: the run 20260101-000005", publish_log: null } });
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", confirm), { status: 409, body: { error: "the branch foo has a job that operates: the run 20260101-000005", publish_log: null } });
   runner.kill();
   await rm(runDir(ctx, "t", "foo", "20260101-000005"), { recursive: true });
 
-  assert.equal((await json("/api/campaigns/t/tasks/foo/draft", send("PUT", { title: "" }))).status, 400);
+  assert.equal((await json("/api/campaigns/t/branches/foo/draft", send("PUT", { title: "" }))).status, 400);
   const draft = { title: "foo: new title", labels: ["x"], description: "Part of #1. It is a bad sentense.\n", words: ["foo"] };
-  const saved = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo/draft", send("PUT", draft))).body);
-  assert.equal(saved.task.pr_meta?.title, "foo: new title");
+  const saved = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo/draft", send("PUT", draft))).body);
+  assert.equal(saved.branch.pr_meta?.title, "foo: new title");
   assert.ok(saved.lint?.findings.some((f) => f.file === "pr.md" && f.line === 1), "the PUT lints the new draft");
-  assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).lint, saved.lint, "the GET lints the draft");
+  assert.deepEqual(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).lint, saved.lint, "the GET lints the draft");
   // memelint findings do not stop the pull request: the conditions agree, thus `createOrUpdatePr` starts `git push`.
-  const linted = await json("/api/campaigns/t/tasks/foo/pr", confirm);
+  const linted = await json("/api/campaigns/t/branches/foo/pr", confirm);
   assert.equal(linted.status, 500, "memelint findings do not stop the pull request");
   assert.match(PublishErrorSchema.parse(linted.body).publish_log ?? "", /\n\$ git push fork t\/foo\n/);
   // A mark with a problem stops the pull request before each command. The check `harness` has no flags.
-  const marked = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo/draft", send("PUT", { ...draft, description: "{{check:harness --force-build}} {{foo}}\n" }))).body);
+  const marked = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo/draft", send("PUT", { ...draft, description: "{{check:harness --force-build}} {{foo}}\n" }))).body);
   const problems = ["the mark `{{check:harness --force-build}}`: the check `harness` has no flag `--force-build`", "the mark `{{foo}}` is not known"];
   assert.deepEqual(marked.mark_problems, problems);
   assert.equal(marked.rendered, "{{check:harness --force-build}} {{foo}}\n", "the text keeps the marks");
-  assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).mark_problems, problems);
-  const oldLog = await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text();
-  assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: `the marks of the draft have problems: ${problems.join("; ")}`, publish_log: null } });
-  assert.equal(await (await api.request("/api/campaigns/t/tasks/foo/publish-log")).text(), oldLog, "no command started");
-  assert.equal((await json("/api/campaigns/t/tasks/bar/draft", send("PUT", draft))).status, 404, "no draft");
-  assert.equal((await json("/api/campaigns/t/tasks/foo/worktree", { method: "DELETE" })).status, 404, "no worktree");
+  assert.deepEqual(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).mark_problems, problems);
+  const oldLog = await (await api.request("/api/campaigns/t/branches/foo/publish-log")).text();
+  assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", confirm), { status: 409, body: { error: `the marks of the draft have problems: ${problems.join("; ")}`, publish_log: null } });
+  assert.equal(await (await api.request("/api/campaigns/t/branches/foo/publish-log")).text(), oldLog, "no command started");
+  assert.equal((await json("/api/campaigns/t/branches/bar/draft", send("PUT", draft))).status, 404, "no draft");
+  assert.equal((await json("/api/campaigns/t/branches/foo/worktree", { method: "DELETE" })).status, 404, "no worktree");
 
   // The draft again: the description of the newest run with a description that is not `wontfix`, and the title of the tip.
   const wontfix = "20260101-000012";
   await writeRun(ctx, "t", { ...run("foo", wontfix, "wontfix", null), base, head: null, finished: "f" });
   await writeFile(join(runDir(ctx, "t", "foo", wontfix), "description.md"), "## No small fix\n");
-  const made = await json("/api/campaigns/t/tasks/foo/draft", { method: "POST" });
+  const made = await json("/api/campaigns/t/branches/foo/draft", { method: "POST" });
   assert.equal(made.status, 201);
-  const seeded = TaskDetailSchema.parse(made.body);
-  assert.deepEqual([seeded.draft, seeded.task.pr_meta?.title, seeded.task.pr_meta?.labels, seeded.task.pr_meta?.words], ["the description\n", "foo: fix", ["x"], []], "the labels stay");
+  const seeded = BranchDetailSchema.parse(made.body);
+  assert.deepEqual([seeded.draft, seeded.branch.pr_meta?.title, seeded.branch.pr_meta?.labels, seeded.branch.pr_meta?.words], ["the description\n", "foo: fix", ["x"], []], "the labels stay");
   await rm(runDir(ctx, "t", "foo", wontfix), { recursive: true });
-  assert.deepEqual(await json("/api/campaigns/t/tasks/bar/draft", { method: "POST" }), { status: 409, body: { error: "no run of the task has a description.md" } });
+  assert.deepEqual(await json("/api/campaigns/t/branches/bar/draft", { method: "POST" }), { status: 409, body: { error: "no run of the branch has a description.md" } });
 });
 
-test("the server adds the tasks to the queue and starts the fleet in zellij", async () => {
+test("the server adds the branches to the queue and starts the fleet in zellij", async () => {
   const jobsView = async (init?: RequestInit, path = "/api/campaigns/t/jobs") => {
     const res = await json(path, init);
     return { status: res.status, view: JobsViewSchema.parse(res.body) };
   };
   assert.deepEqual((await jobsView()).view, { jobs: [], queue: [], fleet: false });
-  assert.equal((await json("/api/campaigns/t/jobs", send("POST", { attrs: [] }))).status, 400);
+  assert.equal((await json("/api/campaigns/t/jobs", send("POST", { keys: [] }))).status, 400);
   assert.equal((await json("/api/campaigns/t/jobs", { method: "POST", body: "nope" })).status, 400);
-  assert.equal((await json("/api/campaigns/t/jobs", send("POST", { attrs: ["nope"] }))).status, 404);
-  assert.equal((await json("/api/campaigns/zzz/jobs", send("POST", { attrs: ["foo"] }))).status, 404);
+  assert.equal((await json("/api/campaigns/t/jobs", send("POST", { keys: ["nope"] }))).status, 404);
+  assert.equal((await json("/api/campaigns/zzz/jobs", send("POST", { keys: ["foo"] }))).status, 404);
 
-  // The task `baz` has a live run: the queue does not get it.
+  // The branch `baz` has a live run: the queue does not get it.
   const runner = await marker("run t baz");
   const fleet = await marker("fleet t");
   process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
   try {
     await writeRun(ctx, "t", run("baz", "20260101-000001", "running", runner.pid ?? null));
-    const added = await jobsView(send("POST", { attrs: ["qux", "baz", "foo"] }));
+    const added = await jobsView(send("POST", { keys: ["qux", "baz", "foo"] }));
     assert.equal(added.status, 202);
-    assert.deepEqual(added.view, { jobs: [{ attr: "baz", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], fleet: true }, "the queue keeps the sequence of the request");
+    assert.deepEqual(added.view, { jobs: [{ key: "baz", id: "20260101-000001", started: "2026-01-01T00:00:00Z" }], queue: ["qux", "foo"], fleet: true }, "the queue keeps the sequence of the request");
     const args = (await readFile(calls, "utf8")).split("---\n");
     // The test zellij lists no session: the server makes it, then opens the tab of the fleet.
     assert.deepEqual(args[0]?.trim().split("\n"), ["list-sessions", "--no-formatting"]);
@@ -283,12 +297,12 @@ test("the server adds the tasks to the queue and starts the fleet in zellij", as
     assert.equal(args.length, 4, "one tab");
 
     // The fleet operates: a second request adds no tab, and an entry that is there keeps its position.
-    assert.deepEqual((await jobsView(send("POST", { attrs: ["foo", "bar"] }))).view.queue, ["qux", "foo", "bar"]);
+    assert.deepEqual((await jobsView(send("POST", { keys: ["foo", "bar"] }))).view.queue, ["qux", "foo", "bar"]);
     assert.equal((await readFile(calls, "utf8")).split("---\n").length, 4, "no second fleet");
     const [summary] = CampaignSummarySchema.array().parse((await json("/api/campaigns")).body);
     assert.deepEqual([summary?.jobs, summary?.queued], [1, 3]);
 
-    assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/jobs/qux")).view.queue, ["foo", "bar"], "the delete of a queued task removes its entry");
+    assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/jobs/qux")).view.queue, ["foo", "bar"], "the delete of a queued branch removes its entry");
     assert.equal((await json("/api/campaigns/t/jobs/qux", { method: "DELETE" })).status, 404, "no entry and no job");
     assert.deepEqual((await jobsView({ method: "DELETE" }, "/api/campaigns/t/queue")).view, { jobs: added.view.jobs, queue: [], fleet: true });
     assert.equal((await json("/api/campaigns/zzz/queue", { method: "DELETE" })).status, 404);
@@ -311,16 +325,17 @@ test("stop sends SIGTERM to the runner", async () => {
 });
 
 test("a run without a question adds the entry and writes no question.md, and a run with a question writes question.md, also at the limit of the campaign", async () => {
-  assert.equal((await json("/api/campaigns/t/tasks/nope/run", send("POST", { question: "Why?" }))).status, 404);
-  assert.equal((await json("/api/campaigns/t/tasks/foo/run", { method: "POST", body: "nope" })).status, 400, "a body that is not JSON");
-  assert.equal((await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "x".repeat(4001) }))).status, 400, "a question that is too long");
-  assert.equal((await json("/api/campaigns/t/tasks/foo/question", send("POST", { question: "Why?" }))).status, 404, "no question route");
+  assert.equal((await json("/api/campaigns/t/branches/nope/run", send("POST", { question: "Why?" }))).status, 404);
+  assert.equal((await json("/api/campaigns/t/branches/foo/run", { method: "POST", body: "nope" })).status, 400, "a body that is not JSON");
+  assert.equal((await json("/api/campaigns/t/branches/foo/run", send("POST", { question: "x".repeat(4001) }))).status, 400, "a question that is too long");
+  assert.equal((await json("/api/campaigns/t/branches/foo/question", send("POST", { question: "Why?" }))).status, 404, "no question route");
+  assert.equal((await json("/api/campaigns/t/tasks/foo/run", { method: "POST" })).status, 404, "the run routes are the routes of a branch");
   // Two runs operate: the campaign has the `concurrency` of the settings, 2, as its number of jobs.
   const runners = [await marker("run t baz"), await marker("run t qux")];
   const fleet = await marker("fleet t");
   process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
   const before = (await readFile(calls, "utf8")).length;
-  const queue = async (init: RequestInit, path = "/api/campaigns/t/tasks/foo/run") => {
+  const queue = async (init: RequestInit, path = "/api/campaigns/t/branches/foo/run") => {
     const res = await json(path, init);
     return { status: res.status, queue: JobsViewSchema.parse(res.body).queue };
   };
@@ -330,28 +345,28 @@ test("a run without a question adds the entry and writes no question.md, and a r
     for (const init of [{ method: "POST" }, send("POST", {}), send("POST", { question: " \n" })] as RequestInit[]) {
       assert.deepEqual(await queue(init), { status: 202, queue: ["foo"] }, String(init.body ?? "no body"));
       assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "no question.md");
-      assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, null);
-      assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", { method: "POST" }), { status: 409, body: { error: "the task foo is in the queue" } });
+      assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).question, null);
+      assert.deepEqual(await json("/api/campaigns/t/branches/foo/run", { method: "POST" }), { status: 409, body: { error: "the branch foo is in the queue" } });
       assert.deepEqual(await queue({ method: "DELETE" }, "/api/campaigns/t/jobs/foo"), { status: 200, queue: [] });
     }
-    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/run", { method: "POST" }), { status: 409, body: { error: "the task baz has a job" } });
+    assert.deepEqual(await json("/api/campaigns/t/branches/baz/run", { method: "POST" }), { status: 409, body: { error: "the branch baz has a job" } });
 
     assert.deepEqual(await queue(send("POST", { question: " Why? " })), { status: 202, queue: ["foo"] }, "the entry of a question is the entry of a run");
     assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n");
     const tabs = (await readFile(calls, "utf8")).slice(before);
     assert.match(tabs, /^t fleet$/m, "the server starts the fleet");
     assert.doesNotMatch(tabs, /"run"/, "only the fleet starts the run");
-    assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, "Why?");
+    assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).question, "Why?");
 
-    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "Again?" })), { status: 409, body: { error: "the task foo is in the queue" } });
-    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/run", { method: "POST" }), { status: 409, body: { error: "the task foo is in the queue" } });
-    assert.deepEqual(await json("/api/campaigns/t/tasks/baz/run", send("POST", { question: "Why?" })), { status: 409, body: { error: "the task baz has a job" } });
+    assert.deepEqual(await json("/api/campaigns/t/branches/foo/run", send("POST", { question: "Again?" })), { status: 409, body: { error: "the branch foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/branches/foo/run", { method: "POST" }), { status: 409, body: { error: "the branch foo is in the queue" } });
+    assert.deepEqual(await json("/api/campaigns/t/branches/baz/run", send("POST", { question: "Why?" })), { status: 409, body: { error: "the branch baz has a job" } });
     assert.equal(await readFile(questionFile(ctx, "t", "foo"), "utf8"), "Why?\n", "a refused run does not change the question");
 
     assert.deepEqual(await queue({ method: "DELETE" }, "/api/campaigns/t/jobs/foo"), { status: 200, queue: [] });
     assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the question goes away with the entry");
-    assert.equal(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/foo")).body).question, null);
-    assert.equal((await json("/api/campaigns/t/tasks/foo/run", send("POST", { question: "Why?" }))).status, 202);
+    assert.equal(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/foo")).body).question, null);
+    assert.equal((await json("/api/campaigns/t/branches/foo/run", send("POST", { question: "Why?" }))).status, 202);
     assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/queue", { method: "DELETE" })).body).queue, []);
     assert.equal(await exists(questionFile(ctx, "t", "foo")), false, "the clear of the queue also removes the questions");
   } finally {
@@ -393,14 +408,15 @@ test("the settings: GET gives the file and the fork, and PUT writes the file", a
 });
 
 test("changeOf", () => {
-  assert.deepEqual(changeOf("cacert/tasks.yaml"), { campaign: "cacert", attr: null, view: true, job: false });
-  assert.deepEqual(changeOf("cacert/tasks/python3Packages.foo/runs/20260101-000000/log.txt"), { campaign: "cacert", attr: "python3Packages.foo", view: true, job: false });
-  assert.deepEqual(changeOf("cacert/tasks/foo/runs/20260101-000000/run.yaml"), { campaign: "cacert", attr: "foo", view: true, job: true });
-  assert.deepEqual(changeOf("cacert/tasks/foo/question.md"), { campaign: "cacert", attr: "foo", view: true, job: false }, "the task page shows the question");
-  assert.deepEqual(changeOf("cacert/queue/python3Packages.foo"), { campaign: "cacert", attr: null, view: false, job: true });
-  assert.deepEqual(changeOf("cacert/fleet.yaml"), { campaign: "cacert", attr: null, view: false, job: true });
+  assert.deepEqual(changeOf("cacert/tasks.yaml"), { campaign: "cacert", key: null, view: true, job: false });
+  assert.deepEqual(changeOf("cacert/links/python3Packages.foo"), { campaign: "cacert", key: null, view: true, job: false }, "a link of a runner changes the task list");
+  assert.deepEqual(changeOf("cacert/branches/python3Packages.foo/runs/20260101-000000/log.txt"), { campaign: "cacert", key: "python3Packages.foo", view: true, job: false });
+  assert.deepEqual(changeOf("cacert/branches/foo/runs/20260101-000000/run.yaml"), { campaign: "cacert", key: "foo", view: true, job: true });
+  assert.deepEqual(changeOf("cacert/branches/foo/question.md"), { campaign: "cacert", key: "foo", view: true, job: false }, "the branch page shows the question");
+  assert.deepEqual(changeOf("cacert/queue/python3Packages.foo"), { campaign: "cacert", key: null, view: false, job: true });
+  assert.deepEqual(changeOf("cacert/fleet.yaml"), { campaign: "cacert", key: null, view: false, job: true });
   assert.equal(changeOf("cacert/fleet.log"), null);
-  assert.equal(changeOf("cacert/tasks/foo/pr.yaml.1.abc.tmp"), null);
+  assert.equal(changeOf("cacert/branches/foo/pr.yaml.1.abc.tmp"), null);
   assert.equal(changeOf("cacert/queue/.foo.1.abc.tmp"), null);
 });
 
@@ -442,9 +458,9 @@ test("the refresh writes the state of the pull request of the branch into the dr
   process.env["PATCHIX_GH_BIN"] = gh;
   try {
     const view = CampaignViewSchema.parse((await json("/api/campaigns/t/refresh", { method: "POST" })).body);
-    const foo = view.tasks.find((t) => t.attr === "foo");
-    assert.deepEqual([foo?.state, foo?.pr_meta?.number, foo?.pr_meta?.state, foo?.pr_meta?.merged], ["merged", 5, "merged", "2026-10-23T12:00:00Z"]);
-    assert.deepEqual(await json("/api/campaigns/t/tasks/foo/pr", confirm), { status: 409, body: { error: "the pull request #5 is merged", publish_log: null } });
+    const foo = view.branches.find((b) => b.key === "foo");
+    assert.deepEqual([view.tasks.find((t) => t.attr === "foo")?.state, foo?.state, foo?.pr_meta?.number, foo?.pr_meta?.state, foo?.pr_meta?.merged], ["merged", "merged", 5, "merged", "2026-10-23T12:00:00Z"]);
+    assert.deepEqual(await json("/api/campaigns/t/branches/foo/pr", confirm), { status: 409, body: { error: "the pull request #5 is merged", publish_log: null } });
   } finally {
     delete process.env["PATCHIX_GH_BIN"];
   }
@@ -456,28 +472,68 @@ test("a commit of the branch without the Assisted-by line is in commit_problems,
   const bad = g("rev-parse", "HEAD");
   execFileSync("git", ["push", "-q", repo, "t/qux"], { cwd: work });
   try {
-    await writeRun(ctx, "t", { ...run("qux", "20260101-000020", "ok", null), base, head: bad, checks: [harness("pass")], finished: "f" });
-    const commits = async () => CommitSchema.array().parse((await json("/api/campaigns/t/tasks/qux/commits")).body).map((x) => x.sha);
+    await writeRun(ctx, "t", { ...run("qux", "20260101-000020", "ok", null), base, head: bad, checks: [harness("pass", "qux")], finished: "f" });
+    // A person links the entry to its branch: the pull request is not possible without an entry.
+    assert.equal((await json("/api/campaigns/t/tasks/qux/branch", send("PUT", { key: "qux" }))).status, 200);
+    const commits = async () => CommitSchema.array().parse((await json("/api/campaigns/t/branches/qux/commits")).body).map((x) => x.sha);
     assert.deepEqual(await commits(), [bad]);
     await writeDraft(ctx, "t", "qux", "Part of #1.\n\n{{disclosure}}\n\n{{check:harness}}\n");
     await writePr(ctx, "t", "qux", { title: "qux: fix", labels: [], words: [], number: null, url: null, created: null, pushed: null, updated: null, state: "open", merged: null, confirmed: null });
     const problems = ["no `Assisted-by: <tool> (<model>) with patchix` line", "a `Co-authored-by` line names an AI: Co-Authored-By: Claude <noreply@anthropic.com>"];
-    const detail = TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body);
-    assert.deepEqual([detail.task.head, detail.commit_problems], [bad, [{ sha: bad, subject: "qux: fix", problems }]]);
+    const detail = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/qux")).body);
+    assert.deepEqual([detail.branch.head, detail.commit_problems], [bad, [{ sha: bad, subject: "qux: fix", problems }]]);
     const error = `the branch does not agree with the automation/AI policy of nixpkgs: commit ${bad.slice(0, 12)}: ${problems.join(", ")}`;
-    assert.deepEqual(await json("/api/campaigns/t/tasks/qux/pr", confirm), { status: 409, body: { error, publish_log: null } });
-    assert.equal((await json("/api/campaigns/t/tasks/qux/publish-log")).status, 404, "no command started");
+    assert.deepEqual(await json("/api/campaigns/t/branches/qux/pr", confirm), { status: 409, body: { error, publish_log: null } });
+    assert.equal((await json("/api/campaigns/t/branches/qux/publish-log")).status, 404, "no command started");
 
     // A person changes the commit, and a run gives the checks of the new tip. Then the conditions agree, and the request starts the commands.
     g("commit", "-q", "--amend", "--allow-empty", "-m", "qux: fix", "-m", ASSISTED);
     execFileSync("git", ["push", "-q", "-f", repo, "t/qux"], { cwd: work });
-    assert.deepEqual(TaskDetailSchema.parse((await json("/api/campaigns/t/tasks/qux")).body).commit_problems, []);
+    assert.deepEqual(BranchDetailSchema.parse((await json("/api/campaigns/t/branches/qux")).body).commit_problems, []);
     const amended = g("rev-parse", "HEAD");
     assert.deepEqual(await commits(), [amended], "the commits of the tip of the branch");
-    await writeRun(ctx, "t", { ...run("qux", "20260101-000021", "ok", null), base, head: amended, checks: [harness("pass")], finished: "f" });
-    const started = await json("/api/campaigns/t/tasks/qux/pr", confirm);
+    await writeRun(ctx, "t", { ...run("qux", "20260101-000021", "ok", null), base, head: amended, checks: [harness("pass", "qux")], finished: "f" });
+    const started = await json("/api/campaigns/t/branches/qux/pr", confirm);
     assert.match(PublishErrorSchema.parse(started.body).publish_log ?? "", /^# publish of t\/qux, /);
   } finally {
     await rm(join(ctx.data, ".cache"), { recursive: true, force: true });
+  }
+});
+
+test("PUT .../tasks/:attr/branch links an entry to a branch and removes the link", async () => {
+  const link = (attr: string, key: unknown) => json(`/api/campaigns/t/tasks/${attr}/branch`, send("PUT", { key }));
+  const linked = await link("baz", "foo");
+  assert.equal(linked.status, 200);
+  const view = CampaignViewSchema.parse(linked.body);
+  assert.deepEqual([view.tasks.find((t) => t.attr === "baz")?.branch, view.branches.find((b) => b.key === "foo")?.covers], ["foo", ["foo", "baz"]]);
+  const detail = BranchDetailSchema.parse((await json("/api/campaigns/t/tasks/baz")).body);
+  assert.deepEqual([detail.branch.key, detail.tasks.map((t) => [t.attr, t.branch])], ["foo", [["foo", "foo"], ["baz", "foo"]]], "the alias gives the branch of the entry");
+  assert.deepEqual(detail.tasks.map((t) => t.state), ["merged", "merged"], "an entry has the state of its branch: the refresh read the merge");
+  assert.deepEqual(await link("baz", "nope"), { status: 404, body: { error: "no branch nope in the campaign t" } }, "the branch must be there");
+  assert.equal((await link("baz", "../x")).status, 400);
+  assert.equal((await link("nope", "foo")).status, 404, "no entry");
+  const unlinked = CampaignViewSchema.parse((await link("baz", null)).body);
+  assert.equal(unlinked.tasks.find((t) => t.attr === "baz")?.branch, null);
+  assert.deepEqual(unlinked.branches.find((b) => b.key === "foo")?.covers, ["foo"]);
+});
+
+test("POST /api/campaigns/:c/run adds a key to the queue: a new key must have a text, and it gets the text as its work", async () => {
+  const fleet = await marker("fleet t");
+  process.env["PATCHIX_TEST_FLEET_PID"] = String(fleet.pid);
+  try {
+    assert.deepEqual(await json("/api/campaigns/t/run", send("POST", { key: "lib-hook" })), { status: 400, body: { error: "the branch lib-hook is not there: a free-text run must have a text" } });
+    assert.equal((await json("/api/campaigns/t/run", send("POST", { key: "../x", question: "x" }))).status, 400);
+    const started = await json("/api/campaigns/t/run", send("POST", { key: "lib-hook", question: " Add one setup hook. " }));
+    assert.deepEqual([started.status, JobsViewSchema.parse(started.body).queue], [202, ["lib-hook"]]);
+    assert.equal(await readFile(questionFile(ctx, "t", "lib-hook"), "utf8"), "Add one setup hook.\n", "the branch directory has the text");
+    const page = BranchDetailSchema.parse((await json("/api/campaigns/t/branches/lib-hook")).body);
+    assert.deepEqual([page.branch.covers, page.tasks, page.question], [[], [], "Add one setup hook."], "the new branch covers no entry");
+    // A run on the key of an entry is possible without a text: it is a usual run of the branch of that key.
+    assert.deepEqual(JobsViewSchema.parse((await json("/api/campaigns/t/run", send("POST", { key: "qux" }))).body).queue, ["lib-hook", "qux"]);
+    assert.deepEqual(await json("/api/campaigns/t/run", send("POST", { key: "qux" })), { status: 409, body: { error: "the branch qux is in the queue" } });
+  } finally {
+    delete process.env["PATCHIX_TEST_FLEET_PID"];
+    fleet.kill();
+    await json("/api/campaigns/t/queue", { method: "DELETE" });
   }
 });

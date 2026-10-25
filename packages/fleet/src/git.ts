@@ -2,7 +2,7 @@
  * The git repository of patchix: `<data>/.cache/nixpkgs.git`. It is a bare clone with depth 1 of the issue repository
  * on the `base_branch`. The remote `origin` is the issue repository, the remote `fork` is the fork of the settings
  * (see `forkUrl` and `forkOf`).
- * The worktrees of the tasks come from it. Each argument goes to `git` as it is: no shell.
+ * The worktrees of the branches come from it. Each argument goes to `git` as it is: no shell.
  *
  * Only two functions get commits through the network: `cloneBase` and `fetchRef`. Each adds `--depth=1`, or
  * `--depth=2` for a branch of a fork. The other operations go through `git()`, which lets only the commands of
@@ -12,10 +12,10 @@
  */
 import { mkdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { tipRun, type Campaign, type Commit, type CommitProblems, type Run, type Task } from "@patchix/common";
+import type { Campaign, Commit, CommitProblems, Run } from "@patchix/common";
 import { forkOf } from "./github.ts";
 import { capture, type CaptureOptions, type Log } from "./proc.ts";
-import { exists, fail, listRuns, readTasks, type Ctx } from "./store.ts";
+import { exists, fail, listRuns, type Ctx } from "./store.ts";
 
 const ALLOWED = new Set(["rev-parse", "rev-list", "log", "diff", "status", "branch", "worktree", "push", "show", "cat-file", "ls-files", "remote", "ls-remote", "config"]);
 const REFUSED = /^--(depth|deepen|unshallow)/;
@@ -33,16 +33,10 @@ export async function git(cwd: string, args: readonly string[], opts: GitOptions
 }
 
 export const repoPath = (ctx: Ctx) => join(ctx.data, ".cache", "nixpkgs.git");
-export const branchName = (campaign: Campaign, attr: string) => `${campaign.branch_prefix}${attr}`;
-/** The branch of the task: `Task.branch`, or `<branch_prefix><attr>`. */
-export const branchOf = (campaign: Campaign, task: Pick<Task, "attr" | "branch">) => task.branch ?? branchName(campaign, task.attr);
-
-/** The branch of the task with this attribute. An attribute that is not in the task list gets `<branch_prefix><attr>`. */
-export async function taskBranch(ctx: Ctx, campaign: Campaign, attr: string): Promise<string> {
-  const task = (await readTasks(ctx, campaign.name))?.tasks.find((t) => t.attr === attr);
-  return branchOf(campaign, task ?? { attr, branch: null });
-}
-export const worktreePath = (ctx: Ctx, campaign: Campaign, attr: string) => join(ctx.data, ".cache", "worktrees", campaign.name, attr);
+/** The branch of the key: `<branch_prefix><key>`. */
+export const branchName = (campaign: Campaign, key: string) => `${campaign.branch_prefix}${key}`;
+/** The worktree of the branch of the key: `.cache/worktrees/<campaign>/<key>`. */
+export const worktreePath = (ctx: Ctx, campaign: Campaign, key: string) => join(ctx.data, ".cache", "worktrees", campaign.name, key);
 
 /**
  * The URL of the fork of the GitHub user `fork`. On GitHub it is an SSH URL. GitHub does not accept an HTTPS push with
@@ -122,11 +116,11 @@ export async function updateBase(ctx: Ctx, campaign: Campaign): Promise<string> 
   return fetchRef(ctx, "origin", campaign.base_branch, 1);
 }
 
-/** Gets the branch of a task from the fork, to continue the work on it. The task must have no worktree. */
-export async function adopt(ctx: Ctx, campaign: Campaign, attr: string): Promise<string> {
-  if (await exists(worktreePath(ctx, campaign, attr))) fail(409, `the task ${attr} has a worktree; remove it first`);
+/** Gets the branch of the key from the fork, to continue the work on it. The branch must have no worktree. */
+export async function adopt(ctx: Ctx, campaign: Campaign, key: string): Promise<string> {
+  if (await exists(worktreePath(ctx, campaign, key))) fail(409, `the branch ${key} has a worktree; remove it first`);
   await cloneBase(ctx, campaign);
-  return fetchRef(ctx, "fork", await taskBranch(ctx, campaign, attr), 2);
+  return fetchRef(ctx, "fork", branchName(campaign, key), 2);
 }
 
 /** The commit of the ref, or `null` when the ref is not there. */
@@ -160,13 +154,13 @@ export interface Worktree {
 }
 
 /**
- * Makes the worktree of a task on the branch of the task (see `taskBranch`), or gives the worktree that is there.
- * When the repository has the branch, the worktree uses it. If not, a new branch starts at the commit of the `base_branch`.
+ * Makes the worktree of the branch of the key (see `branchName`), or gives the worktree that is there. When the
+ * repository has the branch, the worktree uses it. If not, a new branch starts at the commit of the `base_branch`.
  */
-export async function addWorktree(ctx: Ctx, campaign: Campaign, attr: string): Promise<Worktree> {
+export async function addWorktree(ctx: Ctx, campaign: Campaign, key: string): Promise<Worktree> {
   const repo = await cloneBase(ctx, campaign);
-  const path = worktreePath(ctx, campaign, attr);
-  const branch = await taskBranch(ctx, campaign, attr);
+  const path = worktreePath(ctx, campaign, key);
+  const branch = branchName(campaign, key);
   if (await exists(join(path, ".git"))) return { path, branch, base: null };
   await mkdir(dirname(path), { recursive: true });
   if ((await revParse(repo, `refs/heads/${branch}`)) !== null) {
@@ -241,46 +235,46 @@ export async function messages(cwd: string, from: string, to: string): Promise<M
   return out;
 }
 
-/** The commit of the branch of the task, or `null` when the repository or the branch is not there. */
-export async function branchTip(ctx: Ctx, campaign: Campaign, attr: string): Promise<string | null> {
+/** The commit of the branch of the key, or `null` when the repository or the branch is not there. */
+export async function branchTip(ctx: Ctx, campaign: Campaign, key: string): Promise<string | null> {
   const repo = repoPath(ctx);
-  return (await exists(join(repo, "HEAD"))) ? revParse(repo, `refs/heads/${await taskBranch(ctx, campaign, attr)}`) : null;
+  return (await exists(join(repo, "HEAD"))) ? revParse(repo, `refs/heads/${branchName(campaign, key)}`) : null;
 }
 
-/** The branch of a task: see `branchState`. */
-export interface BranchState {
+/** A branch in the repository of patchix: see `branchGit`. */
+export interface BranchGit {
   /** The commit before the fix: the `base` of the newest run with a base (see `startRun`). `null` when no run has one. */
   base: string | null;
   /** The commit of the branch: see `branchTip`. */
   tip: string | null;
   /** The commits from `base` to `tip`, the newest first. Empty without a base or a tip. */
   commits: Message[];
-  /** The newest run with the checks of the tip: see `tipRun`. */
-  tipRun: Run | undefined;
+  /** The runs of the branch, the newest first. `tipChecks` gives the checks of the tip from them. */
+  runs: Run[];
 }
 
 /**
- * The branch of a task in the repository of patchix, with its base, its commits and the run with the checks of its
- * tip. The pull request reads the branch, not a run: a person can change the branch after a run.
+ * The branch of the key in the repository of patchix, with its base, its commits and its runs. The pull request reads
+ * the branch, not a run: a person can change the branch after a run.
  */
-export async function branchState(ctx: Ctx, campaign: Campaign, attr: string): Promise<BranchState> {
-  const runs = await listRuns(ctx, campaign.name, attr);
+export async function branchGit(ctx: Ctx, campaign: Campaign, key: string): Promise<BranchGit> {
+  const runs = await listRuns(ctx, campaign.name, key);
   const base = runs.find((r) => r.base !== "")?.base ?? null;
-  const tip = await branchTip(ctx, campaign, attr);
+  const tip = await branchTip(ctx, campaign, key);
   // A repository that a person made again does not have the base of a previous branch.
   const commits = base === null || tip === null || (await revParse(repoPath(ctx), base)) === null ? [] : await messages(repoPath(ctx), base, tip);
-  return { base, tip, commits, tipRun: tipRun(runs, tip) };
+  return { base, tip, commits, runs };
 }
 
-/** The commits of the branch of a task, each with its patch as `git show` gives it. See `branchState`. */
-export async function branchCommits(ctx: Ctx, campaign: Campaign, attr: string): Promise<Commit[]> {
-  const { commits } = await branchState(ctx, campaign, attr);
+/** The commits of the branch of the key, each with its patch as `git show` gives it. See `branchGit`. */
+export async function branchCommits(ctx: Ctx, campaign: Campaign, key: string): Promise<Commit[]> {
+  const { commits } = await branchGit(ctx, campaign, key);
   return Promise.all(commits.map(async (c) => ({ ...c, patch: await git(repoPath(ctx), ["show", "--format=", "--no-color", "--no-ext-diff", c.sha]) })));
 }
 
-/** `git diff <base> <tip>` of the branch of a task: the change of its pull request. Empty without commits. */
-export async function branchDiff(ctx: Ctx, campaign: Campaign, attr: string): Promise<string> {
-  const { base, tip, commits } = await branchState(ctx, campaign, attr);
+/** `git diff <base> <tip>` of the branch of the key: the change of its pull request. Empty without commits. */
+export async function branchDiff(ctx: Ctx, campaign: Campaign, key: string): Promise<string> {
+  const { base, tip, commits } = await branchGit(ctx, campaign, key);
   return base === null || tip === null || commits.length === 0 ? "" : diff(repoPath(ctx), base, tip);
 }
 

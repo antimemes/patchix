@@ -113,3 +113,24 @@ export function useInterval(fn: () => void, ms: number | null): void {
     return () => window.clearInterval(id);
   }, [ms]);
 }
+
+/**
+ * The tab of a page. The URL hash keeps it, for example `#publish`: thus a link to the page opens the same tab. A hash
+ * that is not a tab of `tabs` gives the first tab.
+ */
+export function useHashTab<T extends string>(tabs: readonly [T, ...T[]]): [T, (tab: T) => void] {
+  const [first] = tabs;
+  const read = useCallback(() => tabs.find((t) => window.location.hash === `#${t}`) ?? first, [tabs, first]);
+  const [tab, setTab] = useState<T>(read);
+  useEffect(() => {
+    const onHash = () => setTab(read());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [read]);
+  const choose = useCallback((next: T) => {
+    setTab(next);
+    const { pathname, search } = window.location;
+    window.history.replaceState(window.history.state, "", `${pathname}${search}#${next}`);
+  }, []);
+  return [tab, choose];
+}

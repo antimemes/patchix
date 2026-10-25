@@ -22,6 +22,7 @@ Instructions:
 - Remove only a keystore, or a runtime that no software starts. Do not remove an executable file, a library or a directory to get a `pass` from the check.
 - A fix can add inputs or change the build, when `jre-generate-cacerts` in `postInstall` is not sufficient. Then the description must tell the cause.
 - Build the package: `nix-build -A <attr>` in the worktree. Do not use `nix build .#<attr>`: the worktree has only a part of the commits, and that command stops with an error. The build must complete. A build of a JDK from source is very long. When the dry run shows such a build, stop with "no small fix".
+- A change can also fix other entries of the task list, for example entries that copy the file that you changed. Then write `attrs.txt` in the run directory: one attribute for each line, with the attribute of this task. patchix starts the checks for each attribute of the list, and an entry with a `pass` points at this branch. Do not write an attribute that the change does not fix.
 - Do not push. Do not make a pull request. Do not edit files that are not in the worktree or the run directory.
 
 ## The check

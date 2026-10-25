@@ -1,11 +1,17 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, within } from "storybook/test";
 import type { Campaign } from "@patchix/common";
-import { CampaignPage, filtersKey } from "./CampaignPage.tsx";
+import { CampaignPage, filtersKey, type CampaignTab } from "./CampaignPage.tsx";
 import { withMock } from "../mock/client.tsx";
 import { replaceParams } from "../router.ts";
-import { CAMPAIGN, at, job, mixedTasks, runningRun, task, worktreePath } from "../mock/fixtures.ts";
+import { CAMPAIGN, FREE_KEY, HEAD, SHARED, SHARED_ATTRS, at, branch, job, mixed, okRun, runningRun, task, worktreePath } from "../mock/fixtures.ts";
 
 const ISSUE_TASKS = ["anki", "arduino-core", "autopsy", "calibre", "electrum", "gajim", "python3Packages.wassima", "zotero"];
+
+/** The page reads its tab from the URL hash when it starts. */
+const openTab = (tab: CampaignTab | null) => () => {
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}${window.location.search}${tab === null ? "" : `#${tab}`}`);
+};
 
 const meta = {
   title: "Storylines/Campaign page",
@@ -15,18 +21,29 @@ const meta = {
   beforeEach: () => {
     replaceParams({ state: "", q: "" });
     window.sessionStorage.removeItem(filtersKey("cacert"));
+    openTab(null)();
   },
 } satisfies Meta<typeof CampaignPage>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+/** Two entries with a branch that has a `running` run, and the other entries without a branch. */
+function running(attrs: readonly string[] = ISSUE_TASKS) {
+  const busy = ["anki", "calibre"];
+  return {
+    tasks: attrs.map((a) => task(a, busy.includes(a) ? { branch: a } : {})),
+    branches: busy.map((a) => branch(a, { runs: [runningRun(a, a === "anki" ? 4 : 11), okRun(a, 300)], head: HEAD, worktree: worktreePath(a) })),
+    jobs: [job("anki", 4), job("calibre", 11)],
+  };
+}
+
 export const Todo: Story = {
-  parameters: { docs: { description: { story: "1. After the first sync: each task is `todo`." } } },
+  parameters: { docs: { description: { story: "1. After the first sync: each task is `todo`, and no branch covers it." } } },
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(1), tasks: ISSUE_TASKS.map((a) => task(a)) }] }))],
 };
 
 export const QueueAll: Story = {
-  parameters: { docs: { description: { story: "\"Queue selected\" adds each task to the queue. Then the fleet starts two runs, the `concurrency` of the settings, and six tasks wait." } } },
+  parameters: { docs: { description: { story: "\"Queue selected\" adds the branch of each task to the queue: the key of its attribute. Then the fleet starts two runs, the `concurrency` of the settings, and six branches wait." } } },
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(1), tasks: ISSUE_TASKS.map((a) => task(a)) }], fleetDelay: 300 }))],
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByText(/^Select the \d+ shown tasks$/));
@@ -37,46 +54,87 @@ export const QueueAll: Story = {
 
 export const Running: Story = {
   parameters: { docs: { description: { story: "2. Two runs operate: the jobs strip shows them, with a Stop button." } } },
-  decorators: [
-    withMock(() => ({
-      campaigns: [
-        {
-          campaign: CAMPAIGN,
-          synced: at(20),
-          tasks: ISSUE_TASKS.map((a) =>
-            a === "anki" || a === "calibre" ? task(a, { state: "running", runs: [runningRun(a, a === "anki" ? 4 : 11)], worktree: worktreePath(a) }) : task(a),
-          ),
-          jobs: [job("anki", 4), job("calibre", 11)],
-        },
-      ],
-    })),
-  ],
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(20), ...running() }] }))],
 };
 
 export const Mixed: Story = {
-  parameters: { docs: { description: { story: "3. Tasks in each state, with source flags, worktrees, check badges, lint counts and the start time of the newest run: some minutes, hours or days ago." } } },
-  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", 6), job("gajim", 2)] }] }))],
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "3. Tasks in each state, with source flags, branches, worktrees, check badges, lint counts and the start time of the newest run. Three Ruby entries have one shared branch. The state of an entry is the state of its branch, and an entry without a branch is `todo`.",
+      },
+    },
+  },
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed(), jobs: [job("arduino-core", 6), job("gajim", 2)] }] }))],
+  play: async ({ canvas }) => {
+    const row = (await canvas.findByRole("link", { name: "rubyPackages.httpclient" })).closest("tr");
+    await expect(row).not.toBeNull();
+    await within(row as HTMLElement).findByRole("link", { name: SHARED });
+  },
+};
+
+export const Branches: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "The Branches tab: each branch with its entries as chips, its state, its newest run and its pull request. The shared branch covers three entries. The free-text branch and the branch of a run without a fix cover no entry.",
+      },
+    },
+  },
+  beforeEach: openTab("branches"),
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed(), jobs: [job("arduino-core", 6), job("gajim", 2)] }] }))],
+  play: async ({ canvas, userEvent }) => {
+    const table = within(await canvas.findByRole("table", { name: "Branches" }));
+    const shared = (await table.findByRole("link", { name: SHARED })).closest("tr") as HTMLElement;
+    for (const attr of SHARED_ATTRS) await within(shared).findByRole("link", { name: attr });
+    const free = (await table.findByRole("link", { name: FREE_KEY })).closest("tr") as HTMLElement;
+    await within(free).findByText("no entry");
+    await userEvent.click(canvas.getByRole("button", { name: /^wontfix/ }));
+    await table.findByRole("link", { name: "bitwarden-desktop" });
+    await expect(table.queryByRole("link", { name: SHARED })).toBeNull();
+  },
+};
+
+export const FreeTextRun: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story: "The Run box at the top: a new key makes a new branch from the base. The text is necessary: it is the work for the agent. After Run, the key waits in the queue.",
+      },
+    },
+  },
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed() }], fleetDelay: 60_000 }))],
+  play: async ({ canvas, userEvent }) => {
+    const box = within(await canvas.findByRole("region", { name: "Run" }));
+    await userEvent.type(box.getByRole("textbox", { name: "Key" }), "python-certifi-hook");
+    await box.findByText("A new branch must have a text: the work for the agent.");
+    await expect(box.getByRole("button", { name: "Run" })).toBeDisabled();
+    await userEvent.type(box.getByRole("textbox", { name: "Text" }), "Make one setup hook for the Python packages that bundle certifi.");
+    await box.findByText("A new branch from the base. The text is the work for the agent.");
+    await userEvent.click(box.getByRole("button", { name: "Run" }));
+    await canvas.findByText("Waiting: 1");
+    await canvas.findByRole("link", { name: "python-certifi-hook" });
+  },
+};
+
+export const RunOfAnEntry: Story = {
+  parameters: { docs: { description: { story: "The Run box with the attribute of an entry: a usual run of the branch of that key. The text is optional, and it is a question." } } },
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: ISSUE_TASKS.map((a) => task(a)) }], fleetDelay: 60_000 }))],
+  play: async ({ canvas, userEvent }) => {
+    const box = within(await canvas.findByRole("region", { name: "Run" }));
+    await userEvent.type(box.getByRole("textbox", { name: "Key" }), "anki");
+    await box.findByText("A run of the branch anki. The text is a question.");
+    await expect(box.getByRole("button", { name: "Run" })).toBeEnabled();
+  },
 };
 
 export const Queued: Story = {
   parameters: {
-    docs: { description: { story: "4. Two runs operate and three tasks wait in the queue. The fleet operates: it starts the next run when a job stops. Each entry has a remove button." } },
+    docs: { description: { story: "4. Two runs operate and three branches wait in the queue. The fleet operates: it starts the next run when a job stops. Each entry has a remove button." } },
   },
-  decorators: [
-    withMock(() => ({
-      campaigns: [
-        {
-          campaign: CAMPAIGN,
-          synced: at(20),
-          tasks: ISSUE_TASKS.map((a) =>
-            a === "anki" || a === "calibre" ? task(a, { state: "running", runs: [runningRun(a, a === "anki" ? 4 : 11)], worktree: worktreePath(a) }) : task(a),
-          ),
-          jobs: [job("anki", 4), job("calibre", 11)],
-          queue: ["zotero", "gajim", "electrum"],
-        },
-      ],
-    })),
-  ],
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(20), ...running(), queue: ["zotero", "gajim", "electrum"] }] }))],
 };
 
 export const QueueWithoutFleet: Story = {
@@ -85,19 +143,8 @@ export const QueueWithoutFleet: Story = {
 };
 
 export const Busy: Story = {
-  parameters: { docs: { description: { story: "6. Each job place is in use: \"Queue selected\" adds the tasks to the queue, and they wait." } } },
-  decorators: [
-    withMock(() => ({
-      campaigns: [
-        {
-          campaign: CAMPAIGN,
-          synced: at(42),
-          tasks: mixedTasks().filter((t) => t.state === "todo" || t.state === "running"),
-          jobs: [job("arduino-core", 6), job("gajim", 2)],
-        },
-      ],
-    })),
-  ],
+  parameters: { docs: { description: { story: "6. Each job place is in use: \"Queue selected\" adds the branches to the queue, and they wait." } } },
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...running(["anki", "calibre", "electrum", "zotero"]) }] }))],
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByText(/^Select the \d+ shown tasks$/));
     await userEvent.click(canvas.getByRole("button", { name: /^Queue selected/ }));
@@ -123,13 +170,18 @@ const NO_SOURCE: Campaign = {
 
 export const NoSource: Story = {
   parameters: { docs: { description: { story: "8. Without a `source` command: no source column." } } },
-  decorators: [withMock(() => ({ campaigns: [{ campaign: NO_SOURCE, synced: at(42), tasks: mixedTasks().map((t) => ({ ...t, in_source: false, in_issue: true })) }] }))],
+  decorators: [
+    withMock(() => {
+      const data = mixed();
+      return { campaigns: [{ campaign: NO_SOURCE, synced: at(42), branches: data.branches, tasks: data.tasks.map((t) => ({ ...t, in_source: false, in_issue: true })) }] };
+    }),
+  ],
 };
 
 export const FilterInUrl: Story = {
-  parameters: { docs: { description: { story: "9. The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=python`. Back from a task page shows the same tasks. `sessionStorage` also keeps the query: the link to the campaign on a task page shows the same tasks." } } },
+  parameters: { docs: { description: { story: "9. The URL query keeps the selected states and the attribute text: `?state=ready,merged&q=python`. Back from a branch page shows the same tasks. `sessionStorage` also keeps the query: the link to the campaign on a branch page shows the same tasks." } } },
   beforeEach: () => replaceParams({ state: "ready,merged", q: "python" }),
-  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks() }] }))],
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed() }] }))],
   play: async ({ canvas }) => {
     await canvas.findByText("Select the 2 shown tasks");
   },

@@ -64,7 +64,7 @@ tasks:
       - node packages/fleet/src/cli.ts sync {{.CLI_ARGS}}
 
   run:
-    desc: "Start one run: task run -- cacert <attr>"
+    desc: "Start one run: task run -- cacert <key>"
     cmds:
       - node packages/fleet/src/cli.ts run {{.CLI_ARGS}}
 
@@ -74,7 +74,7 @@ tasks:
       - node packages/fleet/src/cli.ts fleet {{.CLI_ARGS}}
 
   worktree:
-    desc: "Make a worktree for a person: task worktree -- cacert <attr>"
+    desc: "Make a worktree for a person: task worktree -- cacert <key>"
     cmds:
       - node packages/fleet/src/cli.ts worktree {{.CLI_ARGS}}
 
@@ -84,7 +84,7 @@ tasks:
       - node packages/fleet/src/cli.ts base {{.CLI_ARGS}}
 
   adopt:
-    desc: "Adopt a branch of the fork: task adopt -- cacert <attr>"
+    desc: "Adopt a branch of the fork: task adopt -- cacert <key>"
     cmds:
       - node packages/fleet/src/cli.ts adopt {{.CLI_ARGS}}
 

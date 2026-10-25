@@ -20,6 +20,9 @@ const campaign = CampaignSchema.parse({
   ],
 });
 
+/** The output of the check `harness` for each attribute. */
+const outputs = (by: Record<string, string>) => new Map(Object.entries(by).map(([attr, text]) => [attr, new Map([["harness", text]])]));
+
 test("modelName", () => {
   assert.equal(modelName("claude-opus-5-5"), "Claude Opus 5.5");
   assert.equal(modelName("claude-fable-5-1"), "Claude Fable 5.1");
@@ -46,9 +49,9 @@ test("render replaces each mark", () => {
   const out = render({
     body: "Part of #1.\n\n{{disclosure}}\n\n### Test\n\n{{check:harness}}\n\n{{template}}\n",
     campaign,
-    attr: "foo",
+    attrs: ["foo"],
     pr: null,
-    checks: new Map([["harness", "VERDICT foo: FIXED\n"]]),
+    checks: outputs({ foo: "VERDICT foo: FIXED\n" }),
     models: ["claude-opus-5-5"],
   });
   assert.deepEqual(out.problems, []);
@@ -57,11 +60,19 @@ test("render replaces each mark", () => {
   assert.match(out.text, /```console\nVERDICT foo: FIXED\n```/);
   assert.match(out.text, /## Things done/);
   assert.doesNotMatch(out.text, /\{\{/);
-  assert.deepEqual(render({ body: "see {pr}", campaign, attr: "foo", pr: 42, checks: new Map(), models: [] }), { text: "see 42\n", problems: [] });
+  assert.deepEqual(render({ body: "see {pr}", campaign, attrs: ["foo"], pr: 42, checks: new Map(), models: [] }), { text: "see 42\n", problems: [] });
+});
+
+test("a check mark of a branch with three entries gives one reviewer command and one output for each entry", () => {
+  const out = render({ body: "{{check:harness --force-build}}", campaign, attrs: ["a", "b", "c"], pr: 7, checks: outputs({ a: "VERDICT a: FIXED\n", c: "VERDICT c: FIXED\n" }), models: [] });
+  assert.deepEqual(out.problems, []);
+  assert.match(out.text, /^```sh\nnix run harness -- a --pr 7 --force-build\nnix run harness -- b --pr 7 --force-build\nnix run harness -- c --pr 7 --force-build\n```\n\n<details>/);
+  assert.match(out.text, /<summary>Output of harness: a<\/summary>\n\n```console\nVERDICT a: FIXED\n```\n\n<\/details>\n\n<details>\n<summary>Output of harness: b<\/summary>\n\n```console\n<no output>\n```/);
+  assert.match(out.text, /<summary>Output of harness: c<\/summary>\n\n```console\nVERDICT c: FIXED\n```\n\n<\/details>\n$/);
 });
 
 /** The description of `body`, with the output of `harness` and the pull request 7. */
-const draw = (body: string) => render({ body, campaign, attr: "foo", pr: 7, checks: new Map([["harness", "VERDICT foo: FIXED\n"]]), models: [] });
+const draw = (body: string) => render({ body, campaign, attrs: ["foo"], pr: 7, checks: outputs({ foo: "VERDICT foo: FIXED\n" }), models: [] });
 
 test("a check mark with flags of the check appends them to the reviewer command, in the sequence of the mark", () => {
   const one = draw("{{check:harness --force-build}}");
@@ -126,7 +137,7 @@ test("a different mark is not known", () => {
 });
 
 test("the output of a check is data: its marks give no problem and are not replaced", () => {
-  const out = render({ body: "{{check:harness}}", campaign, attr: "foo", pr: 7, checks: new Map([["harness", "{{foo}} {{template}} {pr}\n"]]), models: [] });
+  const out = render({ body: "{{check:harness}}", campaign, attrs: ["foo"], pr: 7, checks: outputs({ foo: "{{foo}} {{template}} {pr}\n" }), models: [] });
   assert.deepEqual(out.problems, []);
   assert.match(out.text, /```console\n\{\{foo\}\} \{\{template\}\} \{pr\}\n```/);
 });

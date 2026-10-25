@@ -12,7 +12,7 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 const ctx = context();
 // `readCampaign` writes one warning for a `campaign.yaml` with keys that patchix does not use, for example `fork`.
 for (const c of await listCampaigns(ctx)) await readCampaign(ctx, c).catch((e: unknown) => console.error(`campaign ${c}: ${message(e)}`));
-// A repository of a previous version does not have this value. The page of a task gets `git status` of its worktree.
+// A repository of a previous version does not have this value. The page of a branch gets `git status` of its worktree.
 await cacheUntracked(repoPath(ctx)).catch((e: unknown) => console.error(`core.untrackedCache: ${message(e)}`));
 const server = serve({ fetch: app(ctx).fetch, port, hostname: values.host }, (info) => {
   const host = info.family === "IPv6" ? `[${info.address}]` : info.address;

@@ -1,4 +1,4 @@
-import type { Run, TaskView } from "@patchix/common";
+import type { Pr, Run, Task } from "@patchix/common";
 import { ApiError } from "../api.ts";
 import { Badge, StatusBadge } from "../components/Badge.tsx";
 import { CodeBlock } from "../components/CodeBlock.tsx";
@@ -7,8 +7,8 @@ import { Notice } from "../components/Notice.tsx";
 import { pullUrl } from "../format.ts";
 import { useLoad } from "../hooks.ts";
 
-export function PrCell({ task, repo }: { task: TaskView; repo: string }) {
-  const meta = task.pr_meta;
+/** The pull request of the draft of the branch. If not, the pull request and the remark of the issue entry. */
+export function PrCell({ meta, task, repo }: { meta: Pr | null; task?: Pick<Task, "pr" | "remark"> | undefined; repo: string }) {
   if (meta !== null && meta.number !== null) {
     return (
       <Link href={meta.url ?? pullUrl(repo, meta.number)} title="The pull request of patchix">
@@ -16,6 +16,7 @@ export function PrCell({ task, repo }: { task: TaskView; repo: string }) {
       </Link>
     );
   }
+  if (task === undefined) return <span className="muted">—</span>;
   if (task.pr !== null) {
     return (
       <span className="row">
@@ -28,7 +29,7 @@ export function PrCell({ task, repo }: { task: TaskView; repo: string }) {
   return <span className="muted">—</span>;
 }
 
-/** The remark of the issue entry. The task table cuts a long remark. The title has the full text. */
+/** The remark of the issue entry. The table cuts a long remark. The title has the full text. */
 function Remark({ text }: { text: string }) {
   return (
     <span className="pr-remark" title={text}>
@@ -44,7 +45,7 @@ export function RunBadges({ run, checks = run.checks, status = true }: { run: Ru
       {status && <StatusBadge status={run.status} />}
       <TagBadges tags={run.tags} />
       {checks.map((c) => (
-        <StatusBadge key={c.name} status={c.status} title={`${c.name}: ${c.status}`}>
+        <StatusBadge key={`${c.attr}/${c.name}`} status={c.status} title={`${c.name} of ${c.attr}: ${c.status}`}>
           {c.name}
         </StatusBadge>
       ))}

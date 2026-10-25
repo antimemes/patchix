@@ -49,6 +49,7 @@ Instructions:
   - `<attr>: mark as vulnerable to CVE-2026-111497` (item 5)
 - The last line of the message is `Assisted-by: Claude Code (<model name>) with patchix`, for example `Assisted-by: Claude Code (Claude Opus 5.5) with patchix`. The `automation/AI policy` of nixpkgs makes this line necessary, with the tool and the model. Do not add a `Co-Authored-By` line.
 - Build the package: `nix-build -A <attr>` in the worktree. Do not use `nix build .#<attr>`: the worktree has only a part of the commits, and that command stops with an error. The build must complete. For item 5, `nix-build -A <attr>` stops with an error: that is correct. Examine the build with `NIXPKGS_ALLOW_INSECURE=1 nix-build -A <attr>`.
+- A change can also fix other entries of the task list, for example entries that copy the file that you changed. Then write `attrs.txt` in the run directory: one attribute for each line, with the attribute of this task. patchix starts the checks for each attribute of the list, and an entry with a `pass` points at this branch. Do not write an attribute that the change does not fix.
 - Do not push. Do not make a pull request. Do not edit files that are not in the worktree or the run directory.
 
 ## The check

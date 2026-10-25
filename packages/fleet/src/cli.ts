@@ -4,15 +4,16 @@
  * - `sync <campaign>` reads the task list of the tracking issue and of the `source` command, and the state of the
  *   pull requests of the fork.
  * - `refresh <campaign>` reads only the state of the pull requests of the fork. See `refreshPrs`.
- * - `run <campaign> <attr>` does one run of the task and writes its status. The command line must contain
- *   `run <campaign> <attr>`: the server and the fleet look for these words. See `alive`.
+ * - `run <campaign> <key>` does one run of the branch `<branch_prefix><key>` and writes its status. The key of a run
+ *   on an entry is its attribute. The command line must contain `run <campaign> <key>`: the server and the fleet look
+ *   for these words. See `alive`.
  * - `fleet <campaign>` starts the runs of the queue of the campaign, and stops when the queue is empty. See `runFleet`.
- * - `worktree <campaign> <attr>` makes the worktree of the task and writes its path.
+ * - `worktree <campaign> <key>` makes the worktree of the branch and writes its path.
  * - `base <campaign>` gets the newest commit of the `base_branch` with depth 1.
- * - `adopt <campaign> <attr>` gets the branch of the task from the fork with depth 1.
- * - `draft <campaign> <attr>` makes the draft of the pull request: see `makeDraft`.
+ * - `adopt <campaign> <key>` gets the branch from the fork with depth 2.
+ * - `draft <campaign> <key>` makes the draft of the pull request of the branch: see `makeDraft`.
  * - `import <campaign> <git-url> [--descriptions <dir>]` gets the branches `<branch_prefix>*` of a different checkout
- *   with depth 2, and makes a run with the tag `imported` for each task of a branch. See `importBranches`.
+ *   with depth 2, and makes a run with the tag `imported` for each branch with entries. See `importBranches`.
  *
  * `--root <dir>` and `--data <dir>` give the root and the data directory. They come before `PATCHIX_ROOT` and
  * `PATCHIX_DATA`. See `context`. `--path <PATH>` gives the `PATH` of the process: a zellij tab gets the `PATH` of
@@ -33,7 +34,7 @@ import { startRun } from "./run.ts";
 import { context, message, readCampaign } from "./store.ts";
 import { sync } from "./sync.ts";
 
-const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt <campaign> <attr> | draft <campaign> <attr> | import <campaign> <git-url> [--descriptions <dir>]";
+const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run|worktree|adopt|draft <campaign> <key> | import <campaign> <git-url> [--descriptions <dir>]";
 const options = { descriptions: { type: "string" }, root: { type: "string" }, data: { type: "string" }, path: { type: "string" } } as const;
 const { positionals, values } = parseArgs({ allowPositionals: true, options });
 if (values.path) process.env["PATH"] = values.path;
@@ -47,7 +48,7 @@ if (command === "run") for (const signal of ["SIGTERM", "SIGINT"] as const) proc
 
 async function main(): Promise<number> {
   if (campaign === undefined) throw new Error(USAGE);
-  const [attr] = rest;
+  const [key] = rest;
   if (command === "sync" && rest.length === 0) {
     const result = await sync(ctx, campaign);
     for (const w of result.warnings) console.warn(`warning: ${w}`);
@@ -59,9 +60,9 @@ async function main(): Promise<number> {
     console.log(`${campaign}: the refresh changed ${changed.length} drafts${changed.length === 0 ? "" : `: ${changed.join(", ")}`}`);
     return 0;
   }
-  if (command === "run" && attr !== undefined && rest.length === 1) {
-    const run = await startRun(ctx, campaign, attr, abort.signal);
-    console.log(`${attr}: ${run.status} (run ${run.id}, ${run.commits} commits, lint ${run.lint ?? "-"})${run.error === null ? "" : `: ${run.error}`}`);
+  if (command === "run" && key !== undefined && rest.length === 1) {
+    const run = await startRun(ctx, campaign, key, abort.signal);
+    console.log(`${key}: ${run.status} (run ${run.id}, ${run.commits} commits, lint ${run.lint ?? "-"})${run.error === null ? "" : `: ${run.error}`}`);
     return run.status === "ok" || run.status === "unverified" || run.status === "wontfix" ? 0 : 1;
   }
   if (command === "fleet" && rest.length === 0) {
@@ -71,23 +72,23 @@ async function main(): Promise<number> {
     console.log(await updateBase(ctx, await readCampaign(ctx, campaign)));
     return 0;
   }
-  if (command === "adopt" && attr !== undefined && rest.length === 1) {
-    console.log(await adopt(ctx, await readCampaign(ctx, campaign), attr));
+  if (command === "adopt" && key !== undefined && rest.length === 1) {
+    console.log(await adopt(ctx, await readCampaign(ctx, campaign), key));
     return 0;
   }
-  if (command === "worktree" && attr !== undefined && rest.length === 1) {
-    console.log((await addWorktree(ctx, await readCampaign(ctx, campaign), attr)).path);
+  if (command === "worktree" && key !== undefined && rest.length === 1) {
+    console.log((await addWorktree(ctx, await readCampaign(ctx, campaign), key)).path);
     return 0;
   }
-  if (command === "draft" && attr !== undefined && rest.length === 1) {
-    const pr = await makeDraft(ctx, campaign, attr);
-    const rendered = await renderDraft(ctx, campaign, attr);
+  if (command === "draft" && key !== undefined && rest.length === 1) {
+    const pr = await makeDraft(ctx, campaign, key);
+    const rendered = await renderDraft(ctx, campaign, key);
     console.log(`${pr.title}\n\n${rendered?.text ?? ""}`);
     for (const problem of rendered?.problems ?? []) console.error(`warning: ${problem}`);
     return 0;
   }
-  if (command === "import" && attr !== undefined && rest.length === 1) {
-    const url = attr;
+  if (command === "import" && key !== undefined && rest.length === 1) {
+    const url = key;
     const result = await importBranches(ctx, campaign, url, values.descriptions);
     for (const i of result.imported) console.log(`imported ${i.branch}: ${i.attrs.join(", ")} (run ${i.run})`);
     for (const b of result.unmatched_branches) console.log(`unmatched branch ${b}`);

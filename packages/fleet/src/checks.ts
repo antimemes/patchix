@@ -30,24 +30,24 @@ export function checkCommand(command: string, values: CheckValues): string {
 
 export interface ChecksOptions {
   cwd: string;
-  /** The run directory. The output of each check goes into `checks/<name>.txt`. */
+  /** The run directory. The output of each check goes into `checks/<attr>.<name>.txt`: see `checkFile`. */
   dir: string;
   values: CheckValues;
   signal?: AbortSignal | undefined;
   log: (line: string) => void;
 }
 
-/** Starts the checks of the campaign one after the other, with `sh -c` in the worktree. */
+/** Starts the checks of the campaign for the attribute `values.attr` one after the other, with `sh -c` in the worktree. */
 export async function runChecks(campaign: Campaign, opts: ChecksOptions): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   for (const check of campaign.checks) {
     if (opts.signal?.aborted) break;
-    const file = checkFile(opts.dir, check.name);
+    const file = checkFile(opts.dir, opts.values.attr, check.name);
     await mkdir(dirname(file), { recursive: true });
     const out = createWriteStream(file);
     out.on("error", () => undefined);
     const command = checkCommand(check.command, opts.values);
-    opts.log(`check ${check.name}: ${command}`);
+    opts.log(`check ${check.name} of ${opts.values.attr}: ${command}`);
     const began = performance.now();
     let result;
     try {
@@ -58,8 +58,8 @@ export async function runChecks(campaign: Campaign, opts: ChecksOptions): Promis
     const seconds = Math.round((performance.now() - began) / 100) / 10;
     const output = await readFile(file, "utf8");
     const status = result.timedOut || result.stopped || result.code !== 0 ? "error" : passRegex(check.pass, opts.values).test(output) ? "pass" : "fail";
-    opts.log(`check ${check.name}: ${status} (exit code ${result.code ?? result.signal}, ${seconds} s)`);
-    results.push({ name: check.name, status, code: result.code, seconds });
+    opts.log(`check ${check.name} of ${opts.values.attr}: ${status} (exit code ${result.code ?? result.signal}, ${seconds} s)`);
+    results.push({ attr: opts.values.attr, name: check.name, status, code: result.code, seconds });
   }
   return results;
 }

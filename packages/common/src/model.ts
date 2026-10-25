@@ -1,8 +1,9 @@
 /**
- * The schemas of the files. See CLAUDE.md for the directory layout.
+ * The schemas of the files. See AGENTS.md for the directory layout.
  *
  * A campaign is one tracking issue of nixpkgs. Its definition is in `campaigns/<name>/` and is in git.
- * Its state is in `state/<name>/` and is not in git.
+ * Its state is in `state/<name>/` and is not in git. The unit of work is a branch: `state/<name>/branches/<key>/` has
+ * its runs and its draft. An entry of the task list links to its branch: see `Task.branch`.
  */
 import { z } from "zod";
 
@@ -13,6 +14,11 @@ export const Name = z.string().trim().min(1).max(60);
 export const CAMPAIGN_NAME = /^[a-z0-9][a-z0-9-]*$/;
 /** An attribute path of nixpkgs, for example `python3Packages.wassima`. */
 export const ATTR = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+/**
+ * The key of a branch: the part of the branch name after the `branch_prefix` of the campaign. It has the signs of an
+ * attribute. The key of a run on an entry is the attribute of the entry. A person gives the key of a free-text run.
+ */
+export const KEY = ATTR;
 /** The id of a run: its start time. */
 export const RUN_ID = /^\d{8}-\d{6}$/;
 /** The URL of a git repository that the `import` command reads: `https://` or `file://`. */
@@ -37,15 +43,16 @@ export type CheckFlag = z.infer<typeof CheckFlagSchema>;
 export const CheckSchema = z.object({
   name: Name,
   /**
-   * The shell command. The runner starts it in the worktree with `sh -c`. These marks are replaced:
-   * `{attr}`, `{base}` (the commit before the fix), `{after}` (the commit of the fix).
+   * The shell command. The runner starts it in the worktree with `sh -c`, one time for each attribute that the run
+   * declares. These marks are replaced: `{attr}` (the attribute), `{base}` (the commit before the fix), `{after}` (the
+   * commit of the fix).
    */
   command: z.string().min(1),
   /** A regular expression. The check is `pass` when the output agrees with it. */
   pass: z.string().min(1),
   /**
-   * The command that a reviewer can start without a checkout. It goes into the pull request description.
-   * `{attr}` and `{pr}` are replaced. `{pr}` is `<this PR>` until the pull request is made.
+   * The command that a reviewer can start without a checkout. It goes into the pull request description, one time for
+   * each entry of the branch. `{attr}` and `{pr}` are replaced. `{pr}` is `<this PR>` until the pull request is made.
    */
   reviewer: z.string().min(1).optional(),
   /**
@@ -75,7 +82,7 @@ export const CampaignSchema = z.object({
   }),
   /** The branch of the upstream repository that the pull requests go to. */
   base_branch: z.string().min(1).default("master"),
-  /** The branch of one task is `<branch_prefix><attr>`, for example `cacert/python3Packages.wassima`. */
+  /** The branch of the key `<key>` is `<branch_prefix><key>`, for example `cacert/python3Packages.wassima`. */
   branch_prefix: z.string().min(1),
   /** The labels of each new pull request. A person can change them before the pull request is made. */
   labels: z.array(z.string().min(1)).default([]),
@@ -127,12 +134,14 @@ export const TaskSchema = z.object({
   /** The `source` command of the campaign gave this attribute. Always `false` when the campaign has no `source`. */
   in_source: z.boolean().default(false),
   /**
-   * The branch of the task when it is not `<branch_prefix><attr>`. One branch can be the branch of more than one
-   * task, for example `cacert/rubyPackages.algoliasearch-excon-httpclient-nap`. The sync keeps this value.
+   * The key of the branch of this entry: the branch is `<branch_prefix><branch>`. `null`: the entry has no branch. One
+   * branch can have more than one entry, for example `rubyPackages.algoliasearch-excon-httpclient-nap`. The runner sets
+   * it when each check of the entry is `pass` (see `requestLink`). The sync sets it from the pull request number of the
+   * entry, and a person sets it on the page. The sync keeps this value.
    */
-  branch: z.string().min(1).nullable().default(null),
+  branch: z.string().regex(KEY).nullable().default(null),
 });
-export type Task =z.infer<typeof TaskSchema>;
+export type Task = z.infer<typeof TaskSchema>;
 
 export const TasksFileSchema = z.object({
   /** When the issue was read. */
@@ -142,6 +151,8 @@ export const TasksFileSchema = z.object({
 export type TasksFile = z.infer<typeof TasksFileSchema>;
 
 export const CheckResultSchema = z.object({
+  /** The attribute of the check: the value of `{attr}`. The output is in `checks/<attr>.<name>.txt` of the run directory. */
+  attr: z.string().regex(ATTR),
   name: Name,
   /** `pass`: the output agrees with `pass`. `fail`: it does not. `error`: the command did not stop with code 0, or in time. */
   status: z.enum(["pass", "fail", "error"]),
@@ -151,59 +162,87 @@ export const CheckResultSchema = z.object({
 export type CheckResult = z.infer<typeof CheckResultSchema>;
 
 /**
- * `state/<campaign>/tasks/<attr>/runs/<id>/run.yaml`: one try of the agent on one task, or one commit that the
+ * A `run.yaml` of a previous version has the key `attr` and no `key`: the run was a run on that entry, in
+ * `tasks/<attr>/`. Then the key and the declared attributes come from `attr`, and each check without `attr` is a check
+ * of that attribute.
+ */
+function previousRun(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const run = value as Record<string, unknown>;
+  const attr = typeof run["attr"] === "string" ? run["attr"] : undefined;
+  const key = run["key"] ?? attr;
+  const checks = Array.isArray(run["checks"])
+    ? run["checks"].map((c: unknown) => (typeof c === "object" && c !== null && !("attr" in c) ? { ...c, attr: attr ?? key } : c))
+    : run["checks"];
+  return { ...run, key, attrs: run["attrs"] ?? (attr === undefined ? [] : [attr]), checks };
+}
+
+/**
+ * `state/<campaign>/branches/<key>/runs/<id>/run.yaml`: one try of the agent on one branch, or one commit that the
  * `import` command got from a different checkout. `reply.md` of the run directory is the `stdout` of `claude`. The
  * pull request reads the branch, not a run. A file that patchix wrote before this version can have a `kind` key or a
- * `checks_of` key: zod removes them.
+ * `checks_of` key: zod removes them. patchix also reads a file with `attr` and without `key`: see `previousRun`.
  */
-export const RunSchema = z.object({
-  id: z.string().regex(RUN_ID),
-  attr: z.string().regex(ATTR),
-  /**
-   * Marks of the run for the person, for example `imported`. The web page shows each mark. No code examines the
-   * value of a mark: the code uses the other fields of the run.
-   */
-  tags: z.array(z.string()).default([]),
-  /**
-   * The question of a person, also in `question.md` of the run directory. The server writes the question into
-   * `question.md` of the task directory, and the runner moves the file into the run directory. `null`: a run without
-   * a question. See `startRun` in the fleet package.
-   */
-  question: z.string().nullable().default(null),
-  started: z.string(),
-  finished: z.string().nullable(),
-  /**
-   * `running`: the agent or the checks operate. `ok`: `claude` stopped with code 0 and the branch has commits after
-   * the base. The worktree is clean, the run has a description and each check is `pass`. A run with a question can
-   * have no description. It can also keep the tip of the branch when a previous run has the checks of the tip (see
-   * `tipRun`). Then the runner does not start the checks, and the run is `ok` without checks. `unverified`: the agent
-   * completed the work, but a person must examine it and make the decision. One or more checks are `fail` and no
-   * check is `error`. Or the work has a problem: no commit, changes without a commit in the worktree, or no
-   * description. `error` gives the problem, and the runner does not start the checks for it. `wontfix`: the agent
-   * found no small fix for the task. `claude` stopped with code 0, the agent made no commit, the worktree is clean and
-   * `description.md` starts with the heading `## No small fix`. `failed`: patchix or the run did not complete, see
-   * `error`. The run did not start, `claude` stopped with an error or after the time limit, or a check command stopped
-   * with an error. The work of the agent does not make a run `failed`. `stopped`: a person stopped the run. A
-   * `running` record without a live runner is read as `stopped` with the error "the process stopped". The file does
-   * not change.
-   */
-  status: z.enum(["running", "ok", "unverified", "wontfix", "failed", "stopped"]),
-  model: z.string(),
-  /**
-   * The process id of the runner, while the run is `running`. The run operates when this process is there and its
-   * command line contains `run <campaign> <attr>`. See `alive`.
-   */
-  pid: z.number().int().nullable(),
-  /** The commit before the fix. */
-  base: z.string(),
-  /** The commit of the fix, when the agent made one. */
-  head: z.string().nullable(),
-  commits: z.number().int(),
-  checks: z.array(CheckResultSchema),
-  /** The number of memelint findings in `description.md`. */
-  lint: z.number().int().nullable(),
-  error: z.string().nullable(),
-});
+export const RunSchema = z.preprocess(
+  previousRun,
+  z.object({
+    id: z.string().regex(RUN_ID),
+    /** The key of the branch. The directory of the run gives it: see `listRuns`. */
+    key: z.string().regex(KEY),
+    /**
+     * The attributes of the task list that this change fixes, as the agent gave them in `attrs.txt` of the run
+     * directory. Without the file, the key when it is an attribute of the task list. The runner starts the checks for
+     * each attribute of the task list in this list. An attribute that is not in the task list stays in the list, but it
+     * gets no check.
+     */
+    attrs: z.array(z.string().regex(ATTR)).default([]),
+    /**
+     * Marks of the run for the person, for example `imported`. The web page shows each mark. No code examines the
+     * value of a mark: the code uses the other fields of the run.
+     */
+    tags: z.array(z.string()).default([]),
+    /**
+     * The text of a person, also in `question.md` of the run directory: a question about the branch, or the work of a
+     * free-text run. The server writes the text into `question.md` of the branch directory, and the runner moves the
+     * file into the run directory. `null`: a run without a text. See `startRun` in the fleet package.
+     */
+    question: z.string().nullable().default(null),
+    started: z.string(),
+    finished: z.string().nullable(),
+    /**
+     * `running`: the agent or the checks operate. `ok`: `claude` stopped with code 0 and the branch has commits after
+     * the base. The worktree is clean, the run has a description and each check is `pass`. A run with a question can
+     * have no description. It can also keep the tip of the branch when a previous run has the checks of the tip for an
+     * attribute (see `tipChecks`). Then the runner does not start the checks of that attribute again. `unverified`: the
+     * agent completed the work, but a person must examine it and make the decision. One or more checks are `fail` and
+     * no check is `error`. Or the work has a problem: no commit, changes without a commit in the worktree, or no
+     * description. `error` gives the problem, and the runner does not start the checks for it. `wontfix`: the agent
+     * found no small fix for the task. `claude` stopped with code 0, the agent made no commit, the worktree is clean and
+     * `description.md` starts with the heading `## No small fix`. `failed`: patchix or the run did not complete, see
+     * `error`. The run did not start, `claude` stopped with an error or after the time limit, or a check command stopped
+     * with an error. The work of the agent does not make a run `failed`. `stopped`: a person stopped the run. A
+     * `running` record without a live runner is read as `stopped` with the error "the process stopped". The file does
+     * not change.
+     */
+    status: z.enum(["running", "ok", "unverified", "wontfix", "failed", "stopped"]),
+    model: z.string(),
+    /**
+     * The process id of the runner, while the run is `running`. The run operates when this process is there and its
+     * command line contains `run <campaign> <key>`. See `alive`.
+     */
+    pid: z.number().int().nullable(),
+    /** The commit before the fix. */
+    base: z.string(),
+    /** The commit of the fix, when the agent made one. */
+    head: z.string().nullable(),
+    commits: z.number().int(),
+    /** The checks of this run: each check of the campaign for each declared attribute of the task list. */
+    checks: z.array(CheckResultSchema),
+    /** The number of memelint findings in `description.md`. */
+    lint: z.number().int().nullable(),
+    error: z.string().nullable(),
+  }),
+);
 export type Run = z.infer<typeof RunSchema>;
 
 /**
@@ -218,11 +257,11 @@ export const FleetSchema = z.object({
 export type Fleet = z.infer<typeof FleetSchema>;
 
 /**
- * `state/<campaign>/tasks/<attr>/pr.yaml`: the text of the persons for the pull request of a task, before and after it
- * is made. `pr.md` in the same directory is the description source: a copy of `description.md` of a run, with the
- * changes of the persons (see `makeDraft`). See `render.ts` for the marks that it can contain. The commits, the checks
- * and the models come from the branch. A file that patchix wrote before this version can have a `review` key or a
- * `run` key: zod removes them.
+ * `state/<campaign>/branches/<key>/pr.yaml`: the text of the persons for the pull request of a branch, before and
+ * after it is made. `pr.md` in the same directory is the description source: a copy of `description.md` of a run, with
+ * the changes of the persons (see `makeDraft`). See `render.ts` for the marks that it can contain. The commits, the
+ * checks and the models come from the branch. A file that patchix wrote before this version can have a `review` key or
+ * a `run` key: zod removes them.
  */
 export const PrSchema = z.object({
   title: z.string().min(1),
@@ -255,50 +294,67 @@ export const PrSchema = z.object({
 });
 export type Pr = z.infer<typeof PrSchema>;
 
-/** The state of a task, calculated from the files. */
+/**
+ * The state of an entry of the task list, calculated from the files. Without `external`, it is also the state of a
+ * branch: see `BranchStateSchema`.
+ */
 export const TaskStateSchema = z.enum([
   /**
-   * The tick box of the issue entry is set, or the entry has a pull request, and patchix has no draft for the task.
-   * Thus a person did the task without patchix.
+   * The tick box of the issue entry is set, or the entry has a pull request, and the branch of the entry has no
+   * draft. Thus a person did the task without patchix.
    */
   "external",
-  /** The draft has the number of a pull request, and the pull request is open. */
+  /** The draft of the branch has the number of a pull request, and the pull request is open. */
   "pr",
-  /** The draft has the number of a pull request, and the pull request is merged. */
+  /** The draft of the branch has the number of a pull request, and the pull request is merged. */
   "merged",
-  /** The draft has the number of a pull request, and the pull request is closed without a merge. */
+  /** The draft of the branch has the number of a pull request, and the pull request is closed without a merge. */
   "closed",
   /**
-   * No pull request, the newest run is `ok` or `unverified`, and each check of the tip of the branch is `pass` (see
-   * `tipRun`). A person can examine the branch and make the pull request.
+   * No pull request, the newest run is `ok` or `unverified`, each entry of the branch has checks of the tip, and each
+   * check is `pass` (see `tipChecks`). A person can examine the branch and make the pull request.
    */
   "ready",
   /**
-   * No pull request, and the newest run is `ok` or `unverified`. But a check of the tip of the branch did not agree
-   * with its `pass` expression, or the tip has no checks. A person examines the branch and makes the decision. With
-   * the checks of the tip, the person can make the pull request.
+   * No pull request, and the newest run is `ok` or `unverified`. But a check of the tip did not agree with its `pass`
+   * expression, or an entry of the branch has no checks of the tip. Or the branch has no entry. A person examines
+   * the branch and makes the decision. With the checks of the tip for each entry, the person can make the pull request.
    */
   "unverified",
   "running",
-  /** The newest run is `failed` or `stopped`, or a check of the tip of the branch stopped with an error. */
+  /** The newest run is `failed` or `stopped`, or a check of the tip stopped with an error. */
   "failed",
   /** The newest run is `wontfix`: the agent found no small fix. A person must change the issue entry. */
   "wontfix",
-  /** No run at this time. */
+  /** No run at this time. For an entry: the entry has no branch. */
   "todo",
 ]);
 export type TaskState = z.infer<typeof TaskStateSchema>;
 
+/** The state of a branch: see `branchState`. */
+export const BranchStateSchema = TaskStateSchema.exclude(["external"]);
+export type BranchState = z.infer<typeof BranchStateSchema>;
+
+/** An entry of the task list and its state: the state of its branch, see `taskState`. */
 export const TaskViewSchema = TaskSchema.extend({
   state: TaskStateSchema,
-  /** The branch of the task: `branch`, or `<branch_prefix><attr>`. */
-  branch_name: z.string(),
-  /** The tip of the branch: the commit of `branch_name` in the repository of patchix, when the repository has it. */
+});
+export type TaskView = z.infer<typeof TaskViewSchema>;
+
+/** A branch of the campaign: a directory `branches/<key>/`, or the key of an entry link. */
+export const BranchViewSchema = z.object({
+  key: z.string().regex(KEY),
+  /** `<branch_prefix><key>`. */
+  name: z.string(),
+  state: BranchStateSchema,
+  /** The tip of the branch: the commit of `name` in the repository of patchix, when the repository has it. */
   head: z.string().nullable(),
   /** The runs, the newest first. */
   runs: z.array(RunSchema),
   pr_meta: PrSchema.nullable(),
-  /** The path of the worktree of the task, when there is one. */
+  /** The path of the worktree of the branch, when there is one. */
   worktree: z.string().nullable(),
+  /** The attributes of the entries that link to this branch (`Task.branch`), in the sequence of the task list. */
+  covers: z.array(z.string()),
 });
-export type TaskView = z.infer<typeof TaskViewSchema>;
+export type BranchView = z.infer<typeof BranchViewSchema>;

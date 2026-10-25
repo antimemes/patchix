@@ -1,7 +1,7 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
-import { tipProblem, tipRun } from "@patchix/common/status";
-import type { Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, TaskDetail, TaskView } from "@patchix/common";
+import { branchState, taskState, tipChecks, tipProblem } from "@patchix/common/status";
+import type { BranchDetail, BranchView, Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, Task, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
 import * as f from "./fixtures.ts";
@@ -9,25 +9,28 @@ import * as f from "./fixtures.ts";
 export interface MockCampaign {
   campaign: Campaign;
   synced: string | null;
-  tasks: TaskView[];
+  /** The entries of the task list. The mock gives each its state: see `taskState`. */
+  tasks: Task[];
+  /** The branches. The mock gives each its state and its entries: see `branchState`. */
+  branches?: BranchView[];
   jobs?: JobStatus[];
-  /** The attributes of the queue, the first entry first. */
+  /** The keys of the queue, the first entry first. */
   queue?: string[];
   /** A fleet operates. The default: the queue has entries. */
   fleet?: boolean;
-  /** The question of each task for its next run. See `TaskDetail.question`. */
+  /** The question of each branch for its next run. See `BranchDetail.question`. */
   questions?: Record<string, string>;
   drafts?: Record<string, string>;
-  /** `publish.log` of each task. */
+  /** `publish.log` of each branch. */
   publishLogs?: Record<string, string>;
-  /** The commits of the branch of each task with a problem. See `TaskDetail.commit_problems`. */
+  /** The commits of each branch with a problem. See `BranchDetail.commit_problems`. */
   commitProblems?: Record<string, CommitProblems[]>;
   /**
-   * The tasks with a different commit on the branch of the fork, for example an imported branch that a person changed.
-   * The fork rejects a push without `force`. See `PublishInput.force`.
+   * The branches with a different commit on the branch of the fork, for example an imported branch that a person
+   * changed. The fork rejects a push without `force`. See `PublishInput.force`.
    */
   rejected?: string[];
-  /** The tasks with a worktree with changes without a commit. See `TaskDetail.clean`. */
+  /** The branches with a worktree with changes without a commit. See `BranchDetail.clean`. */
   dirty?: string[];
   /** The labels of the issue repository. The default is `LABELS`. */
   labels?: Label[];
@@ -52,7 +55,8 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 interface State {
   campaign: Campaign;
   synced: string | null;
-  tasks: TaskView[];
+  tasks: Task[];
+  branches: BranchView[];
   jobs: JobStatus[];
   queue: string[];
   fleet: boolean;
@@ -69,11 +73,12 @@ export function mockClient(options: MockOptions): Client {
   const states = new Map<string, State>();
   for (const m of options.campaigns) {
     const drafts = new Map(Object.entries(m.drafts ?? {}));
-    for (const t of m.tasks) if (t.pr_meta !== null && !drafts.has(t.attr)) drafts.set(t.attr, f.description(t.attr));
+    for (const b of m.branches ?? []) if (b.pr_meta !== null && !drafts.has(b.key)) drafts.set(b.key, f.description(b.key));
     states.set(m.campaign.name, {
       campaign: m.campaign,
       synced: m.synced,
       tasks: m.tasks.map((t) => structuredClone(t)),
+      branches: (m.branches ?? []).map((b) => structuredClone(b)),
       jobs: [...(m.jobs ?? [])],
       queue: [...(m.queue ?? [])],
       fleet: m.fleet ?? (m.queue ?? []).length > 0,
@@ -103,59 +108,113 @@ export function mockClient(options: MockOptions): Client {
     throw new ApiError(status, message);
   };
   const state = (c: string): State => states.get(c) ?? fail(404, `no campaign ${c}`);
-  const taskOf = (s: State, attr: string): TaskView => s.tasks.find((t) => t.attr === attr) ?? fail(404, `the campaign ${s.campaign.name} has no task ${attr}`);
+  const taskOf = (s: State, attr: string): Task => s.tasks.find((t) => t.attr === attr) ?? fail(404, `no task ${attr} in the campaign ${s.campaign.name}`);
+  /** As the server: a branch with a directory, a link, the key of an entry. See `needBranch`. */
+  const known = (s: State, key: string) => s.branches.some((b) => b.key === key) || s.tasks.some((t) => t.attr === key || t.branch === key);
+  /** The branch of the key. A key of an entry or of a link without runs gets an empty branch. */
+  const branchOf = (s: State, key: string): BranchView => {
+    if (!known(s, key)) fail(404, `no branch ${key} in the campaign ${s.campaign.name}`);
+    let b = s.branches.find((x) => x.key === key);
+    if (b === undefined) {
+      b = f.branch(key);
+      s.branches.push(b);
+    }
+    return b;
+  };
 
-  const changed = (s: State, attr: string | null) => emit({ type: "campaign", campaign: s.campaign.name, attr });
+  const changed = (s: State, key: string | null) => emit({ type: "campaign", campaign: s.campaign.name, key });
   const jobsView = (s: State): JobsView => ({ jobs: s.jobs, queue: s.queue, fleet: s.fleet });
   const jobsChanged = (s: State) => emit({ type: "jobs", campaign: s.campaign.name, ...structuredClone(jobsView(s)) });
 
-  /** As the server: each read of the task lints the draft and examines its marks. */
-  function detail(s: State, attr: string): TaskDetail {
-    const t = taskOf(s, attr);
-    const draft = t.pr_meta === null ? null : (s.drafts.get(attr) ?? null);
-    const rendered = draft === null || t.pr_meta === null ? null : f.fakeRender(draft, attr, t.pr_meta.number);
+  /** As the server: the entries and the state of each branch, and the state of each entry. */
+  function views(s: State): { tasks: TaskView[]; branches: BranchView[] } {
+    const keys = [...new Set([...s.branches.map((b) => b.key), ...s.tasks.flatMap((t) => (t.branch === null ? [] : [t.branch]))])].sort();
+    const branches = keys.map((key) => {
+      const b = s.branches.find((x) => x.key === key) ?? f.branch(key);
+      const covers = s.tasks.filter((t) => t.branch === key).map((t) => t.attr);
+      return { ...b, covers, state: branchState(covers, b.runs, b.pr_meta, b.head) };
+    });
+    const byKey = new Map(branches.map((b) => [b.key, b]));
+    return { tasks: s.tasks.map((t) => ({ ...t, state: taskState(t, t.branch === null ? undefined : byKey.get(t.branch)) })), branches };
+  }
+  const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, ...views(s) });
+  /** The entries of the branch for the checks and the description. A branch without entries gets its key. */
+  const entriesOf = (b: BranchView) => (b.covers.length > 0 ? b.covers : [b.key]);
+
+  /** As the server: each read of the branch lints the draft and examines its marks. */
+  function detail(s: State, key: string): BranchDetail {
+    branchOf(s, key);
+    const all = views(s);
+    const b = all.branches.find((x) => x.key === key) ?? fail(404, `no branch ${key}`);
+    const draft = b.pr_meta === null ? null : (s.drafts.get(key) ?? null);
+    const rendered = draft === null || b.pr_meta === null ? null : f.fakeRender(draft, entriesOf(b), b.pr_meta.number);
     const lint = draft === null ? null : f.fakeLint(draft);
     const marks = draft === null ? [] : f.fakeMarkProblems(draft, s.campaign);
-    return { campaign: s.campaign, task: t, question: s.questions.get(attr) ?? null, draft, rendered, mark_problems: marks, lint, campaign_words: f.CAMPAIGN_WORDS, publish_log: s.publishLogs.get(attr) ?? null, commit_problems: s.commitProblems.get(attr) ?? [], clean: !s.dirty.has(attr) };
+    return {
+      campaign: s.campaign,
+      branch: b,
+      tasks: all.tasks.filter((t) => t.branch === key || t.attr === key),
+      question: s.questions.get(key) ?? null,
+      draft,
+      rendered,
+      mark_problems: marks,
+      lint,
+      campaign_words: f.CAMPAIGN_WORDS,
+      publish_log: s.publishLogs.get(key) ?? null,
+      commit_problems: s.commitProblems.get(key) ?? [],
+      clean: !s.dirty.has(key),
+    };
   }
-  const view = (s: State): CampaignView => ({ campaign: s.campaign, synced: s.synced, tasks: s.tasks });
-  /** The commits of the branch of the task: none without a tip or without a run with a base, as the server. */
-  const branchOf = (t: TaskView) => (t.head === null || !t.runs.some((r) => r.base !== "") ? [] : f.commits(t.attr, t.head));
+  /** The commits of the branch: none without a tip or without a run with a base, as the server. */
+  const commitsOf = (b: BranchView) => (b.head === null || !b.runs.some((r) => r.base !== "") ? [] : f.commits(b.key, b.head));
 
-  /** As the runner: the run starts, and it gets the question of the task. */
-  function launch(s: State, attr: string) {
-    const t = taskOf(s, attr);
-    const run = { ...f.runningRun(attr, 0), question: s.questions.get(attr) ?? null };
-    s.questions.delete(attr);
-    t.runs.unshift(run);
-    t.state = "running";
-    s.jobs.push({ attr, id: run.id, started: run.started });
+  /** As the runner: the run starts, and it gets the question of the branch. */
+  function launch(s: State, key: string) {
+    const b = branchOf(s, key);
+    const run = { ...f.runningRun(key, 0), question: s.questions.get(key) ?? null };
+    s.questions.delete(key);
+    b.runs.unshift(run);
+    s.jobs.push({ key, id: run.id, started: run.started });
   }
 
   /** As the fleet: it starts the runs of the queue while the number of jobs is less than the `concurrency` of the settings. */
   function fleetTick(s: State) {
-    for (const attr of [...s.queue]) {
+    for (const key of [...s.queue]) {
       if (s.jobs.length >= settings.concurrency) break;
-      if (s.jobs.some((j) => j.attr === attr)) continue;
-      s.queue = s.queue.filter((x) => x !== attr);
-      launch(s, attr);
-      changed(s, attr);
+      if (s.jobs.some((j) => j.key === key)) continue;
+      s.queue = s.queue.filter((x) => x !== key);
+      launch(s, key);
+      changed(s, key);
     }
     s.fleet = s.queue.length > 0;
     jobsChanged(s);
   }
   const later = (s: State) => setTimeout(() => fleetTick(s), options.fleetDelay ?? 1500);
-  /** As `dequeue` of the server: it removes the entry and the question of the task. */
-  const remove = (s: State, attr: string) => {
-    s.queue = s.queue.filter((x) => x !== attr);
-    s.questions.delete(attr);
-    changed(s, attr);
+  /** As `dequeue` of the server: it removes the entry and the question of the branch. */
+  const remove = (s: State, key: string) => {
+    s.queue = s.queue.filter((x) => x !== key);
+    s.questions.delete(key);
+    changed(s, key);
   };
+  /** As `queueRun` of the server: the branch goes into the queue, and a question waits for the next run of the branch. */
+  function queueRun(s: State, key: string, text: string) {
+    if (s.jobs.some((j) => j.key === key)) fail(409, `the branch ${key} has a job`);
+    if (s.queue.includes(key)) fail(409, `the branch ${key} is in the queue`);
+    const question = text.trim();
+    if (question === "") s.questions.delete(key);
+    else s.questions.set(key, question);
+    s.queue.push(key);
+    s.fleet = true;
+    jobsChanged(s);
+    changed(s, key);
+    later(s);
+    return jobsView(s);
+  }
 
   return {
     campaigns: () =>
       answer("campaigns", (): CampaignSummary[] =>
-        [...states.values()].map((s) => ({ name: s.campaign.name, title: s.campaign.title, issue: s.campaign.issue, synced: s.synced, counts: f.count(s.tasks), jobs: s.jobs.length, queued: s.queue.length })),
+        [...states.values()].map((s) => ({ name: s.campaign.name, title: s.campaign.title, issue: s.campaign.issue, synced: s.synced, counts: f.count(views(s).tasks), jobs: s.jobs.length, queued: s.queue.length })),
       ),
     campaign: (c) => answer("campaign", () => view(state(c))),
     sync: (c) =>
@@ -167,25 +226,25 @@ export function mockClient(options: MockOptions): Client {
     refresh: (c) => answer("refresh", () => view(state(c))),
     fetchBase: (c) => answer("fetchBase", () => view(state(c))),
     labels: (c) => answer("labels", () => state(c).labels),
-    task: (c, attr) => answer("task", () => detail(state(c), attr)),
-    runFile: (c, attr, id, file) =>
+    branch: (c, key) => answer("branch", () => detail(state(c), key)),
+    runFile: (c, key, id, file) =>
       answer("runFile", () => {
-        const t = taskOf(state(c), attr);
-        const run = t.runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
-        if (file === "prompt") return f.runPrompt(attr);
+        const run = branchOf(state(c), key).runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
+        if (file === "prompt") return f.runPrompt(key);
+        if (file === "attrs") return run.attrs.length === 0 ? fail(404, "the run has no such file") : run.attrs.map((a) => `${a}\n`).join("");
         if (file === "reply") return run.status === "running" ? fail(404, "the run has no such file") : run.question === null ? f.RUN_REPLY : f.REPLY;
         if (run.status === "wontfix") return file === "description" ? f.NO_FIX_DESCRIPTION : fail(404, "the run has no such file");
         // The agent writes the description of a run with a question only when the change makes the previous description incorrect.
-        if (run.status === "running" || run.head === null || (file === "description" && run.question !== null)) fail(404, "the run has no such file");
-        return f.description(attr);
+        if (run.status === "running" || run.head === null || (file === "description" && run.question !== null && run.attrs.length > 0)) fail(404, "the run has no such file");
+        return f.description(key);
       }),
-    // As the server: the branch goes from the base of the newest run with a base to the tip. See `branchState`.
-    commits: (c, attr) => answer("commits", () => branchOf(taskOf(state(c), attr))),
-    diff: (c, attr) => answer("diff", () => (branchOf(taskOf(state(c), attr)).length === 0 ? "" : f.diff(attr))),
-    checkOutput: (c, attr, id, check) =>
+    // As the server: the branch goes from the base of the newest run with a base to the tip. See `branchGit`.
+    commits: (c, key) => answer("commits", () => commitsOf(branchOf(state(c), key))),
+    diff: (c, key) => answer("diff", () => (commitsOf(branchOf(state(c), key)).length === 0 ? "" : f.diff(key))),
+    checkOutput: (c, key, id, attr, check) =>
       answer("checkOutput", () => {
-        const run = taskOf(state(c), attr).runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
-        const result = run.checks.find((x) => x.name === check) ?? fail(404, "the run has no such file");
+        const run = branchOf(state(c), key).runs.find((r) => r.id === id) ?? fail(404, `no run ${id}`);
+        const result = run.checks.find((x) => x.attr === attr && x.name === check) ?? fail(404, "the run has no such file");
         if (check !== "harness") return f.BUILD_OUTPUT;
         return result.status === "error" ? f.harnessError(attr) : f.harnessOutput(attr, result.status === "pass");
       }),
@@ -193,8 +252,8 @@ export function mockClient(options: MockOptions): Client {
     queueRuns: (c, input) =>
       answer("queueRuns", () => {
         const s = state(c);
-        for (const a of input.attrs) taskOf(s, a);
-        for (const a of input.attrs) if (!s.jobs.some((j) => j.attr === a) && !s.queue.includes(a)) s.queue.push(a);
+        for (const k of input.keys) branchOf(s, k);
+        for (const k of input.keys) if (!s.jobs.some((j) => j.key === k) && !s.queue.includes(k)) s.queue.push(k);
         s.fleet ||= s.queue.length > 0;
         jobsChanged(s);
         later(s);
@@ -203,76 +262,83 @@ export function mockClient(options: MockOptions): Client {
     clearQueue: (c) =>
       answer("clearQueue", () => {
         const s = state(c);
-        for (const attr of s.queue) remove(s, attr);
+        for (const key of s.queue) remove(s, key);
         jobsChanged(s);
         later(s);
         return jobsView(s);
       }),
-    stopJob: (c, attr) =>
+    stopJob: (c, key) =>
       answer("stopJob", () => {
         const s = state(c);
-        if (s.queue.includes(attr)) {
-          remove(s, attr);
+        if (s.queue.includes(key)) {
+          remove(s, key);
           jobsChanged(s);
           return jobsView(s);
         }
-        if (!s.jobs.some((j) => j.attr === attr)) fail(404, `the task ${attr} has no entry in the queue and no job`);
-        s.jobs = s.jobs.filter((j) => j.attr !== attr);
-        const t = taskOf(s, attr);
-        const run = t.runs[0];
+        if (!s.jobs.some((j) => j.key === key)) fail(404, `the branch ${key} has no entry in the queue and no job`);
+        s.jobs = s.jobs.filter((j) => j.key !== key);
+        const run = branchOf(s, key).runs[0];
         if (run !== undefined && run.status === "running") {
           run.status = "stopped";
           run.finished = new Date().toISOString();
           run.error = "a person stopped the run";
-          t.state = "failed";
         }
         jobsChanged(s);
-        changed(s, attr);
+        changed(s, key);
         if (s.queue.length > 0) later(s);
         return jobsView(s);
       }),
-    startRun: (c, attr, input) =>
+    startRun: (c, key, input) =>
       answer("startRun", () => {
         const s = state(c);
-        taskOf(s, attr);
-        // As the server: the task goes into the queue, and a question waits for the next run of the task.
-        if (s.jobs.some((j) => j.attr === attr)) fail(409, `the task ${attr} has a job`);
-        if (s.queue.includes(attr)) fail(409, `the task ${attr} is in the queue`);
-        const question = (input.question ?? "").trim();
-        if (question === "") s.questions.delete(attr);
-        else s.questions.set(attr, question);
-        s.queue.push(attr);
-        s.fleet = true;
-        jobsChanged(s);
-        changed(s, attr);
-        later(s);
-        return jobsView(s);
+        branchOf(s, key);
+        return queueRun(s, key, input.question ?? "");
       }),
-    saveDraft: (c, attr, input) =>
+    startFreeRun: (c, input) =>
+      answer("startFreeRun", () => {
+        const s = state(c);
+        const text = (input.question ?? "").trim();
+        // As the server: for a key that is not there, the text is necessary. It goes into the new branch directory.
+        if (!known(s, input.key)) {
+          if (text === "") fail(400, `the branch ${input.key} is not there: a free-text run must have a text`);
+          s.branches.push(f.branch(input.key));
+        }
+        return queueRun(s, input.key, text);
+      }),
+    linkEntry: (c, attr, key) =>
+      answer("linkEntry", () => {
+        const s = state(c);
+        const t = taskOf(s, attr);
+        if (key !== null) branchOf(s, key);
+        t.branch = key;
+        changed(s, null);
+        return view(s);
+      }),
+    saveDraft: (c, key, input) =>
       answer("saveDraft", () => {
         const s = state(c);
-        const t = taskOf(s, attr);
-        if (t.pr_meta === null) fail(404, `the task ${attr} has no draft`);
-        else t.pr_meta = { ...t.pr_meta, title: input.title, labels: input.labels, words: input.words };
-        s.drafts.set(attr, input.description);
-        changed(s, attr);
-        return detail(s, attr);
+        const b = branchOf(s, key);
+        if (b.pr_meta === null) fail(404, `the branch ${key} has no draft; make one first`);
+        else b.pr_meta = { ...b.pr_meta, title: input.title, labels: input.labels, words: input.words };
+        s.drafts.set(key, input.description);
+        changed(s, key);
+        return detail(s, key);
       }),
-    makeDraft: (c, attr) =>
+    makeDraft: (c, key) =>
       answer("makeDraft", () => {
         const s = state(c);
-        const t = taskOf(s, attr);
+        const b = branchOf(s, key);
         // As the server: the newest run with a description that is not `wontfix`. A run of the mock with a head has a description.
-        if (!t.runs.some((r) => r.head !== null && r.status !== "wontfix" && r.status !== "running")) fail(409, "no run of the task has a description.md");
-        const fresh = f.prMeta(attr);
-        t.pr_meta = t.pr_meta === null ? fresh : { ...t.pr_meta, title: fresh.title, words: fresh.words };
-        s.drafts.set(attr, f.roughDescription(attr));
-        changed(s, attr);
-        return detail(s, attr);
+        if (!b.runs.some((r) => r.head !== null && r.status !== "wontfix" && r.status !== "running")) fail(409, "no run of the branch has a description.md");
+        const fresh = f.prMeta(key);
+        b.pr_meta = b.pr_meta === null ? fresh : { ...b.pr_meta, title: fresh.title, words: fresh.words };
+        s.drafts.set(key, f.roughDescription(key));
+        changed(s, key);
+        return detail(s, key);
       }),
     // As the server: the log becomes longer in steps, and the request gives its result after the last step. See `createOrUpdatePr`.
-    createPr: async (c, attr, input) => {
-      if (options.hang) return new Promise<TaskDetail>(() => undefined);
+    createPr: async (c, key, input) => {
+      if (options.hang) return new Promise<BranchDetail>(() => undefined);
       await sleep(options.delay ?? 150);
       const failure = options.fail?.createPr;
       const failed = failure === undefined ? null : new ApiError(failure[0], failure[1], { error: failure[1], ...failure[2] });
@@ -282,55 +348,55 @@ export function mockClient(options: MockOptions): Client {
       // As the server: see `CONFIRM_ERROR` in `packages/common/src/api.ts`.
       if (input.confirmed !== true) fail(409, "confirm that you established confidence in this output");
       const s = state(c);
-      const t = taskOf(s, attr);
-      const meta = t.pr_meta ?? fail(400, `the task ${attr} has no draft`);
+      const b = branchOf(s, key);
+      const covers = views(s).branches.find((x) => x.key === key)?.covers ?? [];
+      const meta = b.pr_meta ?? fail(404, `the branch ${key} has no draft; make one first`);
       if (meta.number !== null && meta.state !== "open") fail(409, `the pull request #${meta.number} is ${meta.state}`);
-      const marks = f.fakeMarkProblems(s.drafts.get(attr) ?? "", s.campaign);
+      const marks = f.fakeMarkProblems(s.drafts.get(key) ?? "", s.campaign);
       if (marks.length > 0) fail(409, `the marks of the draft have problems: ${marks.join("; ")}`);
-      const job = s.jobs.find((j) => j.attr === attr);
-      if (job !== undefined) fail(409, `the task ${attr} has a job that operates: the run ${job.id}`);
-      if (branchOf(t).length === 0) fail(409, `the branch of ${attr} has no commits after its base`);
-      const tip = tipProblem(tipRun(t.runs, t.head));
+      const job = s.jobs.find((j) => j.key === key);
+      if (job !== undefined) fail(409, `the branch ${key} has a job that operates: the run ${job.id}`);
+      if (commitsOf(b).length === 0) fail(409, `the branch ${key} has no commits after its base`);
+      const tip = tipProblem(tipChecks(b.runs, b.head, covers));
       if (tip !== null) fail(409, tip);
-      if (s.dirty.has(attr)) fail(409, `the worktree of ${attr} has changes without a commit: the branch does not have them`);
-      const problems = s.commitProblems.get(attr) ?? [];
+      if (s.dirty.has(key)) fail(409, `the worktree of ${key} has changes without a commit: the branch does not have them`);
+      const problems = s.commitProblems.get(key) ?? [];
       if (problems.length > 0) fail(409, `the branch does not agree with the automation/AI policy of nixpkgs: ${problems.map((p) => `commit ${p.sha.slice(0, 12)}: ${p.problems.join(", ")}`).join("; ")}`);
       const number = meta.number ?? 580201;
       const force = input.force === true;
       // As the server: without `force`, the fork rejects the push, and no `gh` command starts.
-      const rejected = s.rejected.has(attr) && !force;
-      const log = typeof failedLog === "string" ? failedLog : rejected ? f.rejectedPublishLog(attr) : f.publishLog(attr, number, 0, force);
+      const rejected = s.rejected.has(key) && !force;
+      const log = typeof failedLog === "string" ? failedLog : rejected ? f.rejectedPublishLog(key) : f.publishLog(key, number, 0, force);
       for (const step of f.logSteps(log)) {
-        s.publishLogs.set(attr, step);
-        changed(s, attr);
+        s.publishLogs.set(key, step);
+        changed(s, key);
         await sleep(LOG_STEP_MS);
       }
       if (failed !== null) throw failed;
-      if (rejected) throw new ApiError(500, f.rejectedPushError(attr), { error: f.rejectedPushError(attr), publish_log: log });
-      s.rejected.delete(attr);
+      if (rejected) throw new ApiError(500, f.rejectedPushError(key), { error: f.rejectedPushError(key), publish_log: log });
+      s.rejected.delete(key);
       const now = new Date().toISOString();
-      t.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: t.head, confirmed: now };
-      t.state = "pr";
-      changed(s, attr);
-      return structuredClone(detail(s, attr));
+      b.pr_meta = { ...meta, number, url: `https://github.com/${s.campaign.issue.repo}/pull/${number}`, created: meta.created ?? now, updated: now, pushed: b.head, confirmed: now };
+      changed(s, key);
+      return structuredClone(detail(s, key));
     },
-    publishLog: (c, attr) => answer("publishLog", () => state(c).publishLogs.get(attr) ?? fail(404, `the task ${attr} has no publish.log`)),
-    makeWorktree: (c, attr) =>
+    publishLog: (c, key) => answer("publishLog", () => state(c).publishLogs.get(key) ?? fail(404, `the branch ${key} has no publish.log`)),
+    makeWorktree: (c, key) =>
       answer("makeWorktree", () => {
         const s = state(c);
-        const t = taskOf(s, attr);
-        if (s.jobs.some((j) => j.attr === attr)) fail(409, `a run of ${attr} is in progress; its worktree goes away at its end`);
-        t.worktree = f.worktreePath(attr);
-        t.head ??= f.HEAD;
-        changed(s, attr);
-        return { path: t.worktree, branch: t.branch_name };
+        const b = branchOf(s, key);
+        if (s.jobs.some((j) => j.key === key)) fail(409, `a run of ${key} is in progress; its worktree goes away at its end`);
+        b.worktree = f.worktreePath(key);
+        b.head ??= f.HEAD;
+        changed(s, key);
+        return { path: b.worktree, branch: b.name };
       }),
-    removeWorktree: (c, attr) =>
+    removeWorktree: (c, key) =>
       answer("removeWorktree", () => {
         const s = state(c);
-        taskOf(s, attr).worktree = null;
-        changed(s, attr);
-        return detail(s, attr);
+        branchOf(s, key).worktree = null;
+        changed(s, key);
+        return detail(s, key);
       }),
     settings: () => answer("settings", () => settings),
     saveSettings: (input) =>

@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
-import { tipProblem, tipRun } from "@patchix/common/status";
-import type { DraftInput, Pr, Run, TaskDetail } from "@patchix/common";
+import { tipChecks, tipProblem, type TipCheck } from "@patchix/common/status";
+import type { BranchDetail, DraftInput, Pr, Run } from "@patchix/common";
 import { ApiError } from "../api.ts";
 import { Badge, STATE_TONE } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
@@ -35,7 +35,7 @@ const sleep = (ms: number) => new Promise<false>((resolve) => window.setTimeout(
 
 /** The output of the newest click on the pull request button. */
 interface Attempt {
-  /** `publish.log` of the task at the time of the click: the log of a previous request. */
+  /** `publish.log` of the branch at the time of the click: the log of a previous request. */
   before: string | null;
   /** The log of the click. It is `null` until the first command starts, and when no command started. */
   log: string | null;
@@ -43,7 +43,7 @@ interface Attempt {
 
 /**
  * The text below the button. After a click, it is the log of the click. When the request stopped, `publish.log` of
- * the task replaces it. But the previous log and a part of the log of the click do not replace it.
+ * the branch replaces it. But the previous log and a part of the log of the click do not replace it.
  */
 function shownOutput(file: string | null, attempt: Attempt | null, pending: boolean): string | null {
   if (attempt === null) return file;
@@ -54,19 +54,19 @@ function shownOutput(file: string | null, attempt: Attempt | null, pending: bool
 export interface PrState {
   hasDraft: boolean;
   draftDirty: boolean;
-  /** The newest run with the checks of the tip of the branch. See `tipRun`. */
-  tipRun: Run | undefined;
-  /** See `TaskDetail.clean`. */
+  /** The checks of the tip for each entry of the branch. See `tipChecks`. */
+  tip: readonly TipCheck<Run>[];
+  /** See `BranchDetail.clean`. */
   clean: boolean;
   jobRunning: boolean;
   /** The state of the pull request on GitHub, or `null` when the draft has no pull request. */
   prState: Pr["state"] | null;
   /** The tick box above the button. See `Pr.confirmed`. */
   confirmed: boolean;
-  /** The commits of the branch with a problem. See `TaskDetail.commit_problems`. */
-  commitProblems: TaskDetail["commit_problems"];
-  /** The problems of the marks of the draft on the server. See `TaskDetail.mark_problems`. */
-  markProblems: TaskDetail["mark_problems"];
+  /** The commits of the branch with a problem. See `BranchDetail.commit_problems`. */
+  commitProblems: BranchDetail["commit_problems"];
+  /** The problems of the marks of the draft on the server. See `BranchDetail.mark_problems`. */
+  markProblems: BranchDetail["mark_problems"];
 }
 
 /** The text after the commit problems: the instruction for the person. */
@@ -80,10 +80,10 @@ export function prBlockers(s: PrState): string[] {
   if (!s.hasDraft) reasons.push("Make a draft first.");
   if (s.draftDirty) reasons.push("Save the changes of the draft.");
   reasons.push(...s.markProblems);
-  const tip = tipProblem(s.tipRun);
+  const tip = tipProblem(s.tip);
   if (tip !== null) reasons.push(`${tip.charAt(0).toUpperCase()}${tip.slice(1)}.`);
   if (!s.clean) reasons.push("The worktree has changes without a commit. Commit them or remove them, then reload.");
-  if (s.jobRunning) reasons.push("A job of this task operates.");
+  if (s.jobRunning) reasons.push("A job of this branch operates.");
   if (s.prState === "merged") reasons.push("The pull request is merged. patchix does not change a merged pull request.");
   if (s.prState === "closed") reasons.push("The pull request is closed. Open it again on GitHub, then refresh the campaign.");
   if (!s.confirmed) reasons.push("Confirm that you established confidence in this output.");
@@ -91,21 +91,21 @@ export function prBlockers(s: PrState): string[] {
 }
 
 export interface PublishTabProps {
-  detail: TaskDetail;
+  detail: BranchDetail;
   jobRunning: boolean;
-  onDetail: (detail: TaskDetail) => void;
+  onDetail: (detail: BranchDetail) => void;
 }
 
 /** The draft of the pull request: the editor on the left, the preview on the right, and the button that makes the pull request. */
 export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const client = useClient();
   const toast = useToast();
-  const { campaign, task } = detail;
+  const { campaign, branch } = detail;
   const c = campaign.name;
-  const attr = task.attr;
-  const meta = task.pr_meta;
-  const checked = tipRun(task.runs, task.head);
-  const unmet = checked?.checks.filter((r) => r.status === "fail").map((r) => r.name) ?? [];
+  const key = branch.key;
+  const meta = branch.pr_meta;
+  const tip = tipChecks(branch.runs, branch.head, branch.covers);
+  const unmet = tip.flatMap((t) => t.checks.filter((r) => r.status === "fail").map((r) => `${r.name} of ${t.attr}`));
   const labels = useLoad(() => client.labels(c), `labels:${c}`);
   const settings = useLoad(() => client.settings(), "settings");
   const fork = settings.data?.fork_effective ?? null;
@@ -118,7 +118,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     if (draft !== null) setEdit({ ...draft, ...patch });
   };
 
-  // The server lints the draft when it writes the draft and when it gives the task.
+  // The server lints the draft when it writes the draft and when it gives the branch.
   const findings = detail.lint?.findings ?? null;
   /** The flags of each check for the Marks line, for example `harness: --force-build --shim VALUE`. See `Check.flags`. */
   const flagHints = campaign.checks.flatMap((c) => (c.flags !== undefined && c.flags.length > 0 ? [`${c.name}: ${c.flags.map((f) => (f.value ? `${f.name} VALUE` : f.name)).join(" ")}`] : []));
@@ -135,12 +135,12 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   const [force, setForce] = useState(false);
 
   const save = useAction(async (input: DraftInput) => {
-    onDetail(await client.saveDraft(c, attr, { ...input, title: input.title.trim() }));
+    onDetail(await client.saveDraft(c, key, { ...input, title: input.title.trim() }));
     setEdit(null);
     toast("Draft saved");
   });
   const seed = useAction(async () => {
-    onDetail(await client.makeDraft(c, attr));
+    onDetail(await client.makeDraft(c, key));
     setEdit(null);
     toast("Draft made");
   });
@@ -149,7 +149,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     const before = detail.publish_log;
     setAttempt({ before, log: null });
     setAttempts((n) => n + 1);
-    const request = client.createPr(c, attr, { confirmed: true, force });
+    const request = client.createPr(c, key, { confirmed: true, force });
     const stopped = request.then(
       () => true,
       () => true,
@@ -157,7 +157,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
     // While the request operates, the page reads `publish.log` each second. Until the request examined its
     // conditions, the file has the log of a previous request.
     while (!(await Promise.race([stopped, sleep(POLL_MS)]))) {
-      const log = await client.publishLog(c, attr).catch(() => null);
+      const log = await client.publishLog(c, key).catch(() => null);
       if (log !== null && log !== before) setAttempt({ before, log });
     }
     try {
@@ -175,7 +175,7 @@ export function PublishTab({ detail, jobRunning, onDetail }: PublishTabProps) {
   });
   const output = shownOutput(detail.publish_log, attempt, publish.pending);
 
-  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, tipRun: checked, clean: detail.clean, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems, markProblems: detail.mark_problems });
+  const blockers = prBlockers({ hasDraft: saved !== null, draftDirty, tip, clean: detail.clean, jobRunning, prState: meta?.number != null ? meta.state : null, confirmed, commitProblems: detail.commit_problems, markProblems: detail.mark_problems });
 
   if (draft === null) {
     return (

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { CampaignsPage } from "./CampaignsPage.tsx";
 import { withMock } from "../mock/client.tsx";
-import { CAMPAIGN, at, job, mixedTasks, okRun, task } from "../mock/fixtures.ts";
+import { CAMPAIGN, at, branch, HEAD, job, mixed, okRun, task } from "../mock/fixtures.ts";
 
 const meta = {
   title: "Storylines/Campaigns index",
@@ -14,7 +14,7 @@ export const MixedCounts: Story = {
   decorators: [
     withMock(() => ({
       campaigns: [
-        { campaign: CAMPAIGN, synced: at(42), tasks: mixedTasks(), jobs: [job("arduino-core", 6), job("gajim", 2)] },
+        { campaign: CAMPAIGN, synced: at(42), ...mixed(), jobs: [job("arduino-core", 6), job("gajim", 2)] },
         {
           campaign: { ...CAMPAIGN, name: "openssl-1-1", title: "Packages that still use OpenSSL 1.1", issue: { repo: "NixOS/nixpkgs", number: 269713 } },
           synced: null,
@@ -23,11 +23,8 @@ export const MixedCounts: Story = {
         {
           campaign: { ...CAMPAIGN, name: "python-eol", title: "Python 3.9 removal", issue: { repo: "NixOS/nixpkgs", number: 551200 } },
           synced: at(60 * 24 * 3),
-          tasks: [
-            task("python39Packages.six", { state: "external", checked: true, pr: 552001 }),
-            task("python39Packages.attrs", { state: "external", checked: true, pr: 552002 }),
-            task("python39Packages.idna", { state: "ready", runs: [okRun("python39Packages.idna", 300)] }),
-          ],
+          tasks: [task("python39Packages.six", { checked: true, pr: 552001 }), task("python39Packages.attrs", { checked: true, pr: 552002 }), task("python39Packages.idna", { branch: "python39Packages.idna" })],
+          branches: [branch("python39Packages.idna", { runs: [okRun("python39Packages.idna", 300)], head: HEAD })],
         },
       ],
     })),

@@ -29,7 +29,7 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
   const { jobs, queue, fleet } = view;
   const [now, setNow] = useState(() => Date.now());
   useInterval(() => setNow(Date.now()), jobs.length > 0 ? 10_000 : null);
-  const stop = useAction(async (attr: string) => onJobs(await client.stopJob(campaign, attr)));
+  const stop = useAction(async (key: string) => onJobs(await client.stopJob(campaign, key)));
   const clear = useAction(async () => onJobs(await client.clearQueue(campaign)));
   return (
     <section className="jobs-strip" aria-label="Jobs">
@@ -51,10 +51,10 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
       ) : (
         <ul className="plain jobs-strip-list">
           {jobs.map((job) => (
-            <li key={`${job.attr}:${job.id}`} className="job">
+            <li key={`${job.key}:${job.id}`} className="job">
               <div className="row">
-                <Link href={href.task(campaign, job.attr)} className="mono break">
-                  {job.attr}
+                <Link href={href.branch(campaign, job.key)} className="mono break">
+                  {job.key}
                 </Link>
                 <span className="spacer" />
                 <ConfirmDialog
@@ -63,16 +63,16 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
                       Stop
                     </Button>
                   }
-                  title={`Stop the run of ${job.attr}?`}
+                  title={`Stop the run of ${job.key}?`}
                   description="The agent stops. The worktree and the files of the job stay."
                   confirmLabel="Stop"
-                  onConfirm={() => void stop.run(job.attr)}
+                  onConfirm={() => void stop.run(job.key)}
                 />
               </div>
               <p className="small muted">
                 <span className="mono">{job.id}</span> · <span title={time(job.started)}>{ago(job.started, now)}</span> · the agent or the checks operate
               </p>
-              <Progress value={null} label={`run of ${job.attr}`} hideLabel />
+              <Progress value={null} label={`run of ${job.key}`} hideLabel />
             </li>
           ))}
         </ul>
@@ -88,19 +88,19 @@ export function JobsStrip({ campaign, view, concurrency, onJobs }: JobsStripProp
                   Clear queue
                 </Button>
               }
-              title={`Remove the ${queue.length === 1 ? "task" : `${queue.length} tasks`} from the queue?`}
+              title={`Remove the ${queue.length === 1 ? "branch" : `${queue.length} branches`} from the queue?`}
               description="The jobs that operate continue."
               confirmLabel="Clear queue"
               onConfirm={() => void clear.run()}
             />
           </div>
           <ol className="plain jobs-queue">
-            {queue.map((attr) => (
-              <li key={attr} className="jobs-queue-entry">
-                <Link href={href.task(campaign, attr)} className="mono break small">
-                  {attr}
+            {queue.map((key) => (
+              <li key={key} className="jobs-queue-entry">
+                <Link href={href.branch(campaign, key)} className="mono break small">
+                  {key}
                 </Link>
-                <Button size="sm" variant="ghost" aria-label={`Remove ${attr} from the queue`} title="Remove from the queue" pending={stop.pending} onClick={() => void stop.run(attr)}>
+                <Button size="sm" variant="ghost" aria-label={`Remove ${key} from the queue`} title="Remove from the queue" pending={stop.pending} onClick={() => void stop.run(key)}>
                   ×
                 </Button>
               </li>

@@ -218,3 +218,27 @@
 .settings-form {
   max-width: 32rem;
 }
+
+.run-key {
+  max-width: 28rem;
+}
+/* An entry of a branch: a link to its row in the task table, and the button that removes it from the branch. */
+.entry-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.entry-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 12px;
+}
+.entry-chip.is-plain {
+  padding-right: 8px;
+}

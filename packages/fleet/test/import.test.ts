@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { parseIssueTasks } from "../src/issue.ts";
 import { branchAttrs, convertDescription, scopeWords } from "../src/import.ts";
-import { branchDiff, branchState, cloneBase, exists, importBranches, listRuns, readCampaign, readDraft, readPr, readTasks, renderDraft, repoPath, runDir, taskViews, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
+import { tipChecks } from "@patchix/common";
+import { branchDiff, branchGit, campaignState, cloneBase, exists, importBranches, listRuns, readCampaign, readDraft, readPr, readTasks, renderDraft, repoPath, runDir, writeSettings, writeTasks, type Ctx } from "../src/index.ts";
 import { mergeTasks } from "../src/sync.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" }).trim();
@@ -154,14 +155,14 @@ test("scopeWords", () => {
   assert.deepEqual(scopeWords(TOML, "docs/stray.md"), []);
 });
 
-test("the sync keeps the branch of a task", () => {
+test("the sync keeps the branch of an entry", () => {
   const [old] = parseIssueTasks("- [ ] **foo** — `/a`\n");
   assert.ok(old !== undefined);
-  const tasks = mergeTasks(parseIssueTasks("- [x] **foo** — `/a`\n"), new Map([["new", ""]]), [{ ...old, branch: "t/x" }]);
-  assert.deepEqual(tasks.map((t) => [t.attr, t.checked, t.branch]), [["foo", true, "t/x"], ["new", false, null]]);
+  const tasks = mergeTasks(parseIssueTasks("- [x] **foo** — `/a`\n"), new Map([["new", ""]]), [{ ...old, branch: "x" }]);
+  assert.deepEqual(tasks.map((t) => [t.attr, t.checked, t.branch]), [["foo", true, "x"], ["new", false, null]]);
 });
 
-test("the import makes a run and a draft for each task of a branch", async () => {
+test("the import makes a run and a draft for each branch, and links its entries", async () => {
   const url = `file://${source}`;
   // A worktree of a person makes a branch at the tip of the base branch. The branch has no work: the import replaces it.
   git(await cloneBase(ctx, await readCampaign(ctx, "t")), "branch", "t/foo", "master");
@@ -175,36 +176,38 @@ test("the import makes a run and a draft for each task of a branch", async () =>
   assert.equal(git(repo, "rev-list", "--count", "master"), "1");
   const tip = git(source, "rev-parse", "t/foo");
   const [run] = await listRuns(ctx, "t", "foo");
-  assert.deepEqual([run?.tags, run?.status, run?.base, run?.head, run?.commits, run?.model], [["imported"], "ok", master, tip, 1, "claude-opus-5-5"]);
-  assert.deepEqual(run?.checks.map((c) => [c.name, c.status]), [["harness", "pass"]]);
+  assert.deepEqual([run?.key, run?.attrs, run?.tags, run?.status, run?.base, run?.head, run?.commits, run?.model], ["foo", ["foo", "foo2"], ["imported"], "ok", master, tip, 1, "claude-opus-5-5"]);
+  assert.deepEqual(run?.checks.map((c) => [c.attr, c.name, c.status]), [["foo", "harness", "pass"], ["foo2", "harness", "pass"]], "the output of the description is the check of each entry");
   const dir = runDir(ctx, "t", "foo", run?.id ?? "");
   assert.equal(await exists(join(dir, "diff.patch")), false, "the branch has the diff, not the run");
   assert.match(await branchDiff(ctx, await readCampaign(ctx, "t"), "foo"), /^\+\{ t\/foo \}$/m);
   assert.match(await readFile(join(dir, "log.txt"), "utf8"), new RegExp(`import of the branch t/foo \\(${tip}\\) from ${url}`));
-  assert.equal(await readFile(join(dir, "checks", "harness.txt"), "utf8"), "$ harness foo\nVERDICT foo emudhra: FIXED\n");
+  assert.equal(await readFile(join(dir, "checks", "foo.harness.txt"), "utf8"), "$ harness foo\nVERDICT foo emudhra: FIXED\n");
+  assert.equal(await readFile(join(dir, "attrs.txt"), "utf8"), "foo\nfoo2\n");
 
   const pr = await readPr(ctx, "t", "foo");
   assert.deepEqual([pr?.title, pr?.labels, pr?.words, pr?.number, pr?.url, pr?.state], ["foo: use cacert bundle", ["1.severity: security"], ["castore"], 577, "https://github.com/NixOS/nixpkgs/pull/577", "open"]);
   assert.deepEqual((await renderDraft(ctx, "t", "foo"))?.problems, [], "the marks of the draft have no problem");
   const rendered = (await renderDraft(ctx, "t", "foo"))?.text ?? "";
-  assert.match(rendered, /harness foo --pr 577/);
+  assert.match(rendered, /```sh\nharness foo --pr 577\nharness foo2 --pr 577\n```/, "one reviewer command for each entry of the branch");
   assert.match(rendered, /VERDICT foo emudhra: FIXED/);
   assert.match(rendered, /Before 577, it trusts/);
   assert.doesNotMatch(rendered, /\{\{|\{pr\}/);
 
-  assert.equal(await readDraft(ctx, "t", "pkgs.b"), await readDraft(ctx, "t", "pkgs.a"), "shared.md is the description of the two tasks");
-  assert.deepEqual((await readPr(ctx, "t", "pkgs.b"))?.words, ["gem"]);
-  assert.equal((await readPr(ctx, "t", "pkgs.a"))?.title, "pkgs.{a,b}: use cacert bundle", "the title comes from the tip of the branch of the task");
-  assert.deepEqual((await branchState(ctx, await readCampaign(ctx, "t"), "pkgs.a")).tipRun?.tags, ["imported"], "the imported run has the checks of the tip");
-  assert.equal((await readPr(ctx, "t", "pkgs.b"))?.number, null);
-  assert.equal(await readDraft(ctx, "t", "foo2"), await readDraft(ctx, "t", "foo"), "foo.md is the file of the branch suffix");
-  assert.deepEqual((await readTasks(ctx, "t"))?.tasks.map((t) => [t.attr, t.branch]), [["foo", null], ["pkgs.a", "t/pkgs.a-b"], ["pkgs.b", "t/pkgs.a-b"], ["foo2", "t/foo"]]);
-  const views = await taskViews(ctx, "t");
-  assert.deepEqual(views.map((v) => [v.attr, v.state, v.branch_name, v.head]), [
-    ["foo", "pr", "t/foo", tip],
-    ["pkgs.a", "ready", "t/pkgs.a-b", git(source, "rev-parse", "t/pkgs.a-b")],
-    ["pkgs.b", "ready", "t/pkgs.a-b", git(source, "rev-parse", "t/pkgs.a-b")],
-    ["foo2", "pr", "t/foo", tip],
+  assert.match(await readDraft(ctx, "t", "pkgs.a-b") ?? "", /^Part of #1\./, "shared.md is the description of the branch of the two entries");
+  assert.equal(await exists(join(ctx.data, "state", "t", "branches", "pkgs.a")), false, "one directory for the branch, not one for each entry");
+  assert.deepEqual((await readPr(ctx, "t", "pkgs.a-b"))?.words, ["gem"]);
+  assert.equal((await readPr(ctx, "t", "pkgs.a-b"))?.title, "pkgs.{a,b}: use cacert bundle", "the title comes from the tip of the branch");
+  const shared = await branchGit(ctx, await readCampaign(ctx, "t"), "pkgs.a-b");
+  assert.deepEqual(tipChecks(shared.runs, shared.tip, ["pkgs.a", "pkgs.b"]).map((t) => t.run?.tags), [["imported"], ["imported"]], "the imported run has the checks of the tip for each entry");
+  assert.equal((await readPr(ctx, "t", "pkgs.a-b"))?.number, null);
+  assert.match((await renderDraft(ctx, "t", "pkgs.a-b"))?.text ?? "", /```sh\nharness pkgs\.a --pr <this PR>\nharness pkgs\.b --pr <this PR>\n```/);
+  assert.deepEqual((await readTasks(ctx, "t"))?.tasks.map((t) => [t.attr, t.branch]), [["foo", "foo"], ["pkgs.a", "pkgs.a-b"], ["pkgs.b", "pkgs.a-b"], ["foo2", "foo"]]);
+  const state = await campaignState(ctx, "t");
+  assert.deepEqual(state.tasks.map((v) => [v.attr, v.state, v.branch]), [["foo", "pr", "foo"], ["pkgs.a", "ready", "pkgs.a-b"], ["pkgs.b", "ready", "pkgs.a-b"], ["foo2", "pr", "foo"]]);
+  assert.deepEqual(state.branches.map((b) => [b.key, b.name, b.head, b.covers]), [
+    ["foo", "t/foo", tip, ["foo", "foo2"]],
+    ["pkgs.a-b", "t/pkgs.a-b", git(source, "rev-parse", "t/pkgs.a-b"), ["pkgs.a", "pkgs.b"]],
   ]);
 
   const again = await importBranches(ctx, "t", url);

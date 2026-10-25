@@ -1,8 +1,8 @@
 /**
  * The fleet of a campaign: one process, `cli.ts fleet <campaign>`, that starts the runs of the queue. It operates in a
- * tab of the zellij session. Each 5 seconds, it reads the campaign, the settings and the queue. The `concurrency` of
- * the settings is the maximum number of jobs of the campaign. Until the campaign has that number of jobs, the fleet
- * starts the run of the first entry without a job and removes the entry. When the queue is empty, the fleet stops. The
+ * tab of the zellij session. Each 5 seconds, it reads the campaign, the settings and the queue. An entry of the queue is
+ * the key of a branch. The `concurrency` of the settings is the maximum number of jobs of the campaign. Until the
+ * campaign has that number of jobs, the fleet starts the run of the first entry without a job and removes the entry. When the queue is empty, the fleet stops. The
  * fleet does not operate the runs: each run has its tab.
  *
  * The server starts the fleet with `ensureFleet` when it adds an entry, when it starts, and each 30 seconds.
@@ -14,6 +14,8 @@ import type { Campaign, Run } from "@patchix/common";
 import { launch } from "./zellij.ts";
 import {
   alive,
+  branchDir,
+  branchExists,
   dequeue,
   fleetAlive,
   fleetMarker,
@@ -27,13 +29,11 @@ import {
   readCampaign,
   readFleet,
   readSettings,
-  readTasks,
   removeFleet,
   runId,
   serial,
   stateDir,
   takeQuestion,
-  taskDir,
   writeFleet,
   writeRun,
   type Ctx,
@@ -64,20 +64,20 @@ function logger(ctx: Ctx, c: string, opts: FleetOptions): (line: string) => Prom
 }
 
 /**
- * Starts the run of the task in a new tab and waits for its `run.yaml`. When the runner does not write a record in
- * `startMs`, the fleet writes a `failed` record with the model `model`. That record gets the question of the task. The
- * fleet writes no other record of a run. Then it removes the entry of the queue.
+ * Starts the run of the branch in a new tab and waits for its `run.yaml`. When the runner does not write a record in
+ * `startMs`, the fleet writes a `failed` record with the model `model`. That record gets the question of the branch.
+ * The fleet writes no other record of a run. Then it removes the entry of the queue.
  */
-async function startOne(ctx: Ctx, campaign: Campaign, model: string, attr: string, log: (line: string) => Promise<void>, startMs: number): Promise<void> {
+async function startOne(ctx: Ctx, campaign: Campaign, model: string, key: string, log: (line: string) => Promise<void>, startMs: number): Promise<void> {
   const c = campaign.name;
   const started = new Date();
   const since = runId(started);
-  /** The newest run of the task that started after the fleet opened the tab. */
-  const record = async (): Promise<Run | null> => (await listRuns(ctx, c, attr)).find((r) => r.id >= since) ?? null;
-  await log(`${attr}: start the run`);
+  /** The newest run of the branch that started after the fleet opened the tab. */
+  const record = async (): Promise<Run | null> => (await listRuns(ctx, c, key)).find((r) => r.id >= since) ?? null;
+  await log(`${key}: start the run`);
   let error: string | null = null;
   try {
-    if (!(await launch(ctx, `${c}/${attr}`, ["run", c, attr])).tab) await log(`${attr}: warning: the tab ${c}/${attr} is not in the zellij session; the run can operate without a tab`);
+    if (!(await launch(ctx, `${c}/${key}`, ["run", c, key])).tab) await log(`${key}: warning: the tab ${c}/${key} is not in the zellij session; the run can operate without a tab`);
   } catch (e) {
     error = message(e);
   }
@@ -87,21 +87,21 @@ async function startOne(ctx: Ctx, campaign: Campaign, model: string, attr: strin
     run = await record();
   }
   if (run !== null) {
-    await log(`${attr}: the run ${run.id} started`);
+    await log(`${key}: the run ${run.id} started`);
   } else if ((await record()) === null) {
-    const id = await newId(join(taskDir(ctx, c, attr), "runs"));
-    const question = await takeQuestion(ctx, c, attr, id);
+    const id = await newId(join(branchDir(ctx, c, key), "runs"));
+    const question = await takeQuestion(ctx, c, key, id);
     const text = error === null ? "the run did not start" : `the run did not start: ${error}`;
-    await writeRun(ctx, c, { id, attr, tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
-    await log(`${attr}: ${text}; the fleet wrote the failed run ${id}`);
+    await writeRun(ctx, c, { id, key, attrs: [], tags: [], question, started: started.toISOString().replace(/\.\d+Z$/, "Z"), finished: now(), status: "failed", model, pid: null, base: "", head: null, commits: 0, checks: [], lint: null, error: text });
+    await log(`${key}: ${text}; the fleet wrote the failed run ${id}`);
   }
-  await dequeue(ctx, c, attr);
-  await log(`${attr}: removed from the queue`);
+  await dequeue(ctx, c, key);
+  await log(`${key}: removed from the queue`);
 }
 
 /**
- * One step of the fleet. Gives `false` when the queue is empty. An entry of an attribute that is not in the task
- * list is removed.
+ * One step of the fleet. Gives `false` when the queue is empty. An entry of a branch that is not there is removed: see
+ * `branchExists`.
  */
 export async function fleetTick(ctx: Ctx, c: string, opts: FleetOptions = {}): Promise<boolean> {
   const log = logger(ctx, c, opts);
@@ -109,20 +109,19 @@ export async function fleetTick(ctx: Ctx, c: string, opts: FleetOptions = {}): P
   const queue = await listQueue(ctx, c);
   if (queue.length === 0) return false;
   const live = await jobs(ctx, c);
-  const busy = new Set(live.map((j) => j.attr));
-  const tasks = new Set(((await readTasks(ctx, c))?.tasks ?? []).map((t) => t.attr));
+  const busy = new Set(live.map((j) => j.key));
   const settings = await readSettings(ctx);
   let free = settings.concurrency - live.length;
-  for (const attr of queue) {
+  for (const key of queue) {
     if (free <= 0) break;
-    if (busy.has(attr)) continue;
-    if (!tasks.has(attr)) {
-      await dequeue(ctx, c, attr);
-      await log(`${attr}: not in the task list; removed from the queue`);
+    if (busy.has(key)) continue;
+    if (!(await branchExists(ctx, campaign, key))) {
+      await dequeue(ctx, c, key);
+      await log(`${key}: no branch ${key}; removed from the queue`);
       continue;
     }
-    await startOne(ctx, campaign, settings.model, attr, log, opts.startMs ?? 30_000);
-    busy.add(attr);
+    await startOne(ctx, campaign, settings.model, key, log, opts.startMs ?? 30_000);
+    busy.add(key);
     free--;
   }
   return true;
