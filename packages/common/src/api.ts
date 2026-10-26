@@ -12,13 +12,15 @@
  * - `POST /api/campaigns/:c/sync` makes the state agree with GitHub and gives `SyncView`. It reads the tracking issue
  *   (and the `source` command) again. Then it reads the pull requests as `POST .../refresh` does. Then it reads the
  *   branches `<branch_prefix>*` of the fork with `git ls-remote`. It gets each branch that the repository of patchix
- *   does not have, with a depth of 2 commits. A branch of the fork without a directory gets a directory with one run
- *   with the tag `imported`. A branch with an open or merged pull request and without a draft gets a draft from the
- *   pull request. An entry without a branch gets a link to the branch of its attribute, when the fork has that
- *   branch. If not, it gets a link to the branch of the pull request number of its issue line, when a draft has that
- *   number. A branch of the fork without a pull request and without checks of the tip gets a check-only run in the
- *   queue (see `POST .../branches/:key/check`). Then the server starts the fleet. `SyncView.result` gives the numbers
- *   of each step. See `sync` in the fleet package.
+ *   does not have, with a depth of 2 commits. A branch of the fork without a run gets one run with the tag
+ *   `imported`. Each branch of the fork gets `fork.yaml` with its commit on the fork (see `ForkSchema`). A branch
+ *   that the repository of patchix has with a different commit does not change: it is in `SyncResult.diverged`. A
+ *   branch with an open or merged pull request and without a draft gets a draft from the pull request. An entry
+ *   without a branch gets a link to the branch of its attribute, when the fork has that branch. If not, it gets a link
+ *   to the branch of the pull request number of its issue line, when a draft has that number. A branch of the fork
+ *   without a pull request and without checks of the tip gets a check-only run in the queue (see
+ *   `POST .../branches/:key/check`). Then the server starts the fleet. `SyncView.result` gives the numbers of each
+ *   step. See `sync` in the fleet package.
  * - `POST /api/campaigns/:c/refresh` reads the pull requests of the fork on GitHub (one `gh pr list`) and gives
  *   `CampaignView`. It writes the `state`, `merged` and `url` of each draft with the number of a pull request of the list.
  *   A draft without a number gets the number of the pull request of its branch. See `refreshPrs`.
@@ -83,7 +85,8 @@
  *   Without `Pr.pushed`, the push only adds commits to the branch on the fork. When the fork rejects the push, the
  *   request gives the error with the output of `git`. Then the person can set the tick box `Force push` of the page.
  *   With it, the next request has `force: true`. Then `git push --force` replaces the branch on the fork when the
- *   draft has no `pushed` commit. See `PublishInput.force`.
+ *   draft has no `pushed` commit. See `PublishInput.force`. After the push, `fork.yaml` of the branch gets the
+ *   commit of the push.
  * - `GET /api/campaigns/:c/branches/:key/publish-log` gives `publish.log` of the branch as text, or 404 when the file
  *   is not there. After the conditions of `POST .../pr`, the first line of the request replaces the file. Then the file
  *   gets each command when it starts, and its output when it stops. Thus the page reads this route each second while
@@ -93,6 +96,13 @@
  *   removed.
  * - `POST /api/campaigns/:c/base` gets the newest commit of the base branch into the repository of patchix (one fetch
  *   with depth 1) and gives `CampaignView`. The worktrees that are there do not change.
+ * - `POST /api/campaigns/:c/branches/:key/adopt` gets the branch from the fork with a depth of 2 commits. The new
+ *   commit replaces the branch of the repository of patchix, also when it has a different commit (see
+ *   `SyncResult.diverged`). Then the server does step 3 of the sync for this branch. A branch without a run gets the
+ *   run with the tag `imported`. The branch also gets `fork.yaml`, the draft from the pull request and the links. It
+ *   gives `BranchDetail`. A branch with a job or with an entry in
+ *   the queue gives 409. A worktree of the branch with changes without a commit also gives 409. The server removes a
+ *   clean worktree before the fetch, and makes it again from the new commit. See `adoptBranch` in the fleet package.
  * - `POST /api/campaigns/:c/import` with an `ImportInput` body gets the branches `<branch_prefix>*` of a different
  *   checkout, with one fetch of depth 2 for each branch. It makes one run with the tag `imported` for each branch with
  *   entries of the task list, and links the entries without a branch. With `descriptions`, it also makes the drafts. It
@@ -161,6 +171,20 @@ export const CommitProblemsSchema = z.object({
 });
 export type CommitProblems = z.infer<typeof CommitProblemsSchema>;
 
+/**
+ * A branch that the repository of patchix has with a different commit than the fork. The sync does not change it: the
+ * local commit can have work that the fork does not have. See `SyncResult.diverged` and `BranchDetail.diverged`.
+ */
+export const DivergedSchema = z.object({
+  /** The key of the branch. */
+  key: z.string().regex(KEY),
+  /** The commit of the branch in the repository of patchix. */
+  local: z.string(),
+  /** The commit of the branch on the fork. */
+  fork: z.string(),
+});
+export type Diverged = z.infer<typeof DivergedSchema>;
+
 export const BranchDetailSchema = z.object({
   campaign: CampaignSchema,
   branch: BranchViewSchema,
@@ -206,6 +230,13 @@ export const BranchDetailSchema = z.object({
    * branch has no worktree. The branch does not have such changes, and `POST .../pr` gives 409 for them.
    */
   clean: z.boolean(),
+  /**
+   * The repository of patchix has a different commit for the branch than `fork.yaml` (see `ForkSchema`). `null` when
+   * the commits are the same, or when the branch has no `fork.yaml` or no commit in the repository of patchix.
+   * `POST .../adopt` replaces the local commit with the commit of the fork. When the local commit is newer, the push of
+   * `POST .../pr` replaces the commit of the fork.
+   */
+  diverged: DivergedSchema.nullable(),
 });
 export type BranchDetail = z.infer<typeof BranchDetailSchema>;
 
@@ -336,7 +367,7 @@ export const SyncResultSchema = z.object({
   listed: z.number().int(),
   /** The branches of the fork that the sync got with depth 2. */
   fetched: z.number().int(),
-  /** The branch directories that the sync made, each with one run with the tag `imported`. */
+  /** The branches without a run that got one run with the tag `imported`. */
   made: z.number().int(),
   /** The drafts that the sync made from the pull requests of the fork. */
   drafts: z.number().int(),
@@ -344,7 +375,12 @@ export const SyncResultSchema = z.object({
   links: z.number().int(),
   /** The check-only runs that the sync added to the queue. */
   queued: z.number().int(),
-  /** For example a branch of the fork that the repository of patchix has with a different commit. */
+  /**
+   * The branches of the fork that the repository of patchix has with a different commit. The sync does not change
+   * them. See `POST .../branches/:key/adopt`.
+   */
+  diverged: z.array(DivergedSchema),
+  /** For example a branch of the fork with a name that is not a key, or an error of `git ls-remote`. */
   warnings: z.array(z.string()),
 });
 export type SyncResult = z.infer<typeof SyncResultSchema>;

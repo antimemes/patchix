@@ -3,26 +3,27 @@
  * 1. The task list in `state/<campaign>/tasks.yaml`: the entries of the tracking issue and, when the campaign has a
  *    `source` command, its output.
  * 2. The state of the pull requests of the fork: see `refreshPrs`.
- * 3. The branches `<branch_prefix>*` of the fork: see `forkBranch`. Each branch gets its commits, a branch directory
- *    and a draft from its pull request, when the state does not have them. Then the entries without a branch get
+ * 3. The branches `<branch_prefix>*` of the fork: see `forkBranch`. Each branch gets its commits, a run and a draft
+ *    from its pull request, when the state does not have them, and `fork.yaml`. Then the entries without a branch get
  *    their links: see `linkBranches`.
  * 4. A check-only run in the queue for each branch of the fork without a pull request and without checks of the tip:
  *    see `queueChecks`.
  *
  * Only `fetchRef` gets commits, with a depth of 2 commits. A branch of the repository of patchix that the fork does not
- * have does not change. It can be work that a person did not push. The sync does not start the fleet: the server
- * starts it.
+ * have does not change. It can be work that a person did not push. The sync also does not change a local branch with
+ * a different commit than the fork: it is in `SyncResult.diverged`, and `adoptBranch` replaces it. The sync does not
+ * start the fleet: the server starts it.
  */
-import { ATTR, KEY, tipChecks, type Campaign, type SyncResult, type Task } from "@patchix/common";
+import { ATTR, KEY, tipChecks, type Campaign, type Diverged, type SyncResult, type Task } from "@patchix/common";
 import { parseIssueTasks } from "./issue.ts";
 import { forkOf, issueBody, prList, type ListedPr } from "./github.ts";
-import { adopt, baseWorktree, branchName, cloneBase, commitTime, forkUrl, remoteBranches, repoPath, revParse, takeBranch, type RemoteBranch } from "./git.ts";
+import { addWorktree, adopt, baseWorktree, branchName, cloneBase, commitTime, forkUrl, isClean, remoteBranches, removeWorktree, repoPath, revParse, takeBranch, worktreePath, type RemoteBranch } from "./git.ts";
 import { importRun } from "./import.ts";
 import { draftFromPr, refreshPrs } from "./pr.ts";
 import { capture } from "./proc.ts";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-import { branchDir, branchKeys, campaignDir, checkAttrs, enqueue, exists, fail, jobs, listQueue, listRuns, message, now, readCampaign, readPr, updateTasks, type Ctx } from "./store.ts";
+import { branchJob, branchKeys, campaignDir, checkAttrs, enqueue, exists, fail, jobs, listQueue, listRuns, message, now, readCampaign, readPr, removeFork, updateTasks, writeFork, type Ctx } from "./store.ts";
 
 /**
  * The task list of the issue body. A campaign with a `tasks.ts` file gives a different function, for an issue with a
@@ -124,28 +125,34 @@ export async function linkBranches(ctx: Ctx, c: string, keys: ReadonlySet<string
   return { tasks: file?.tasks ?? [], links };
 }
 
-/** The result of `forkBranch`. `tip` is the commit of the branch in the repository of patchix, or `null` when the sync does not change the branch. */
+/**
+ * The result of `forkBranch`. `tip` is the commit of the branch in the repository of patchix, or `null` when the sync
+ * does not change the branch. Then `diverged` has the two commits.
+ */
 export interface ForkStep {
   fetched: boolean;
   made: boolean;
   draft: boolean;
   tip: string | null;
+  diverged: Diverged | null;
 }
 
 /**
  * Step 3 of the sync for the branch `b` of the fork. The repository of patchix gets the branch with `takeBranch`. When
- * the branch has no directory, the sync makes the directory with one run with the tag `imported` (see `importRun`).
- * The `head` of the run is the tip, and its `base` is the parent. Its time is the time of the commit, and it declares
- * no attribute. When the branch has no draft, the newest open or merged pull request of `listed` gives the draft:
- * see `draftFromPr`. The `headRefName` of that pull request is the name of the branch.
+ * the branch has no run, the sync makes one run with the tag `imported` (see `importRun`). The `head` of the run is
+ * the tip, and its `base` is the parent. Its time is the time of the commit, and it declares no attribute. When the
+ * branch has no draft, the newest open or merged pull request of `listed` gives the draft: see `draftFromPr`. The
+ * `headRefName` of that pull request is the name of the branch. At the end, `fork.yaml` gets the commit of the fork.
+ * A branch with a different local commit does not change: see `takeBranch`. It gets only the draft and `fork.yaml`.
  */
 export async function forkBranch(ctx: Ctx, campaign: Campaign, b: RemoteBranch, listed: readonly ListedPr[], warnings: string[]): Promise<ForkStep> {
   const c = campaign.name;
+  const repo = repoPath(ctx);
   const taken = await takeBranch(ctx, campaign, "fork", b);
-  if (taken === null) warnings.push(`the repository of patchix has the branch ${b.branch} with a different commit than the fork: the sync does not change it (the adopt command replaces it)`);
+  const local = taken === null ? await revParse(repo, `refs/heads/${b.branch}`) : null;
   let made = false;
-  if (taken !== null && !(await exists(branchDir(ctx, c, b.key)))) {
-    const repo = repoPath(ctx);
+  // A run gives the base of the branch. `fork.yaml` can make the directory of a branch without a run: thus the condition is the run, not the directory.
+  if (taken !== null && (await listRuns(ctx, c, b.key)).length === 0) {
     const parent = await revParse(repo, `${taken.tip}^`);
     if (parent === null) {
       warnings.push(`the repository of patchix has no parent of the tip of ${b.branch}: no run`);
@@ -157,7 +164,14 @@ export async function forkBranch(ctx: Ctx, campaign: Campaign, b: RemoteBranch, 
   }
   const pr = listed.find((p) => p.headRefName === b.branch && p.state !== "CLOSED");
   const draft = pr !== undefined && (await draftFromPr(ctx, c, b.key, pr, b.sha));
-  return { fetched: taken?.fetched ?? false, made, draft, tip: taken?.tip ?? null };
+  await writeFork(ctx, c, b.key, b.sha);
+  return { fetched: taken?.fetched ?? false, made, draft, tip: taken?.tip ?? null, diverged: local === null ? null : { key: b.key, local, fork: b.sha } };
+}
+
+/** The text of a branch of `SyncResult.diverged`, for the CLI and the log of the server. */
+export function divergedText(campaign: Campaign, d: Diverged): string {
+  const branch = branchName(campaign, d.key);
+  return `the repository of patchix has the branch ${branch} at ${d.local.slice(0, 12)}, and the fork at ${d.fork.slice(0, 12)}: the sync does not change it (adopt ${campaign.name} ${d.key}: replace the local branch with the commit of the fork)`;
 }
 
 /**
@@ -206,8 +220,8 @@ export async function sync(ctx: Ctx, c: string): Promise<SyncResult> {
   const listed = await prList(campaign.issue.repo, await forkOf(ctx));
   const prs = await refreshPrs(ctx, campaign, listed);
 
-  const result: SyncResult = { tasks: file?.tasks.length ?? 0, prs, listed: 0, fetched: 0, made: 0, drafts: 0, links, queued: 0, warnings };
-  let remote: RemoteBranch[] = [];
+  const result: SyncResult = { tasks: file?.tasks.length ?? 0, prs, listed: 0, fetched: 0, made: 0, drafts: 0, links, queued: 0, diverged: [], warnings };
+  let remote: RemoteBranch[] | null = null;
   try {
     await cloneBase(ctx, campaign);
     remote = await remoteBranches(ctx, campaign, "fork");
@@ -215,7 +229,7 @@ export async function sync(ctx: Ctx, c: string): Promise<SyncResult> {
     warnings.push(`the branches of the fork: ${message(e)}`);
   }
   const taken: { key: string; tip: string }[] = [];
-  for (const b of remote) {
+  for (const b of remote ?? []) {
     result.listed++;
     if (!KEY.test(b.key)) {
       warnings.push(`the branch ${b.branch} of the fork: the name after the prefix is not a key`);
@@ -226,23 +240,44 @@ export async function sync(ctx: Ctx, c: string): Promise<SyncResult> {
     result.made += Number(step.made);
     result.drafts += Number(step.draft);
     if (step.tip !== null) taken.push({ key: b.key, tip: step.tip });
+    if (step.diverged !== null) result.diverged.push(step.diverged);
   }
+  const keys = new Set((remote ?? []).filter((b) => KEY.test(b.key)).map((b) => b.key));
+  // These branches are not on the fork: their `fork.yaml` has a commit that the fork does not have.
+  if (remote !== null) for (const key of await branchKeys(ctx, c)) if (!keys.has(key)) await removeFork(ctx, c, key);
   // `refreshPrs` and the new drafts can give a branch the number of a pull request: see `linkBranches`.
-  const linked = await linkBranches(ctx, c, new Set(remote.filter((b) => KEY.test(b.key)).map((b) => b.key)));
+  const linked = await linkBranches(ctx, c, keys);
   result.links += linked.links;
   result.queued = await queueChecks(ctx, campaign, taken, listed, linked.tasks);
   return result;
 }
 
 /**
- * `adopt <campaign> <key>`: step 3 of the sync for one branch. The fetch replaces the branch of the repository of
- * patchix, also when it has a different commit: the person asks for it. The branch must have no worktree (see
- * `adopt`). When `gh pr list` gives an error, the branch gets no draft, and the error is a warning.
+ * `adopt <campaign> <key>` and `POST .../adopt`: step 3 of the sync for one branch. The fetch replaces the branch of
+ * the repository of patchix, also when it has a different commit: the person asks for it. A branch with a job or with
+ * an entry in the queue gives an error with status 409: the job uses the branch. A worktree with changes without a
+ * commit also gives 409. A clean worktree is removed before the fetch, because `git` does not change a branch of a
+ * worktree (see `adopt`). Then it is made again from the new commit. When `gh pr list` gives an error, the branch
+ * gets no draft, and the error is a warning.
  */
 export async function adoptBranch(ctx: Ctx, c: string, key: string): Promise<ForkStep & { links: number; warnings: string[] }> {
   if (!KEY.test(key)) fail(400, `not a branch key: ${key}`);
   const campaign = await readCampaign(ctx, c);
-  const tip = await adopt(ctx, campaign, key);
+  if ((await branchJob(ctx, c, key)) !== null) fail(409, `the branch ${key} has a job`);
+  if ((await listQueue(ctx, c)).includes(key)) fail(409, `the branch ${key} is in the queue`);
+  const worktree = worktreePath(ctx, campaign, key);
+  const remake = await exists(worktree);
+  if (remake) {
+    if (!(await isClean(worktree))) fail(409, `the worktree of ${key} has changes without a commit: commit or remove them first`);
+    await removeWorktree(ctx, worktree);
+  }
+  let tip: string;
+  try {
+    tip = await adopt(ctx, campaign, key);
+  } finally {
+    // After an error of the fetch, the worktree comes back with the commit that the branch had before.
+    if (remake) await addWorktree(ctx, campaign, key);
+  }
   const warnings: string[] = [];
   const listed = await prList(campaign.issue.repo, await forkOf(ctx)).catch((e: unknown) => {
     warnings.push(`gh pr list: ${message(e)}; no draft from the pull request`);

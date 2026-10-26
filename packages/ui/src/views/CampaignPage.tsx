@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BranchState, BranchView, Campaign, TaskState, TaskView } from "@patchix/common";
+import type { BranchState, BranchView, Campaign, Diverged, TaskState, TaskView } from "@patchix/common";
 import { tipChecks } from "@patchix/common/status";
 import { Badge, STATE_TONE, StateChip } from "../components/Badge.tsx";
 import { Button } from "../components/Button.tsx";
@@ -18,7 +18,7 @@ import { useAction, useDebounced, useHashTab, useLoad, useSignals } from "../hoo
 import { href, param, replaceParams } from "../router.ts";
 import { JobsStrip, NO_JOBS } from "./JobsStrip.tsx";
 import { RunControl } from "./RunControl.tsx";
-import { PrCell, RunBadges } from "./shared.tsx";
+import { ADOPT_HELP, AdoptButton, DivergedCommits, PrCell, RunBadges } from "./shared.tsx";
 import "./views.css";
 
 /** The key of `sessionStorage` that keeps the URL query of `campaign`: `state=ready,merged&q=text`. */
@@ -100,11 +100,14 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   /** The warnings of the newest sync of this page. */
   const [warnings, setWarnings] = useState<readonly string[]>([]);
+  /** The `SyncResult.diverged` of the newest sync of this page. The Adopt button removes a branch from the list. */
+  const [diverged, setDiverged] = useState<readonly Diverged[]>([]);
 
   const sync = useAction(async () => {
     const { result, ...next } = await client.sync(name);
     view.replace(next);
     setWarnings(result.warnings);
+    setDiverged(result.diverged);
     if (result.queued > 0) jobs.reload();
     toast("The state agrees with GitHub", syncLine(result));
   });
@@ -198,6 +201,34 @@ export function CampaignPage({ campaign: name }: { campaign: string }) {
           <ul className="reasons">
             {warnings.map((w) => (
               <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </Notice>
+      )}
+      {diverged.length > 0 && (
+        <Notice tone="warning" aria-label="Diverged branches">
+          <p>The repository of patchix has a different commit than the fork for these branches. The sync does not change them. {ADOPT_HELP}</p>
+          <ul className="reasons">
+            {diverged.map((d) => (
+              <li key={d.key}>
+                <div className="row">
+                  <Link href={href.branch(name, d.key)} className="mono">
+                    {d.key}
+                  </Link>
+                  <DivergedCommits diverged={d} />
+                  <AdoptButton
+                    campaign={name}
+                    diverged={d}
+                    onAdopted={() => {
+                      setDiverged((list) => list.filter((x) => x.key !== d.key));
+                      view.reload();
+                    }}
+                  />
+                  <Link href={`${href.branch(name, d.key)}#publish`} title="The local commit is newer: push it to the fork from the Publish tab of the branch.">
+                    Publish tab
+                  </Link>
+                </div>
+              </li>
             ))}
           </ul>
         </Notice>

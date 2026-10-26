@@ -103,6 +103,7 @@ async function detail(ctx: fleet.Ctx, c: string, key: string): Promise<BranchDet
     return { base: null, tip: null, commits: [], runs: branch.runs };
   });
   const rendered = await fleet.renderDraft(ctx, c, key, git);
+  const fork = await fleet.readFork(ctx, c, key);
   return {
     campaign,
     branch,
@@ -116,6 +117,7 @@ async function detail(ctx: fleet.Ctx, c: string, key: string): Promise<BranchDet
     publish_log: await fleet.readPublishLog(ctx, c, key),
     commit_problems: fleet.commitProblems(git.commits),
     clean: branch.worktree === null || (await fleet.isClean(branch.worktree).catch(() => false)),
+    diverged: fork === null || branch.head === null || fork.sha === branch.head ? null : { key, local: branch.head, fork: fork.sha },
   };
 }
 
@@ -170,6 +172,8 @@ export function app(ctx: fleet.Ctx): Hono {
   api.get("/api/campaigns/:c", async (c) => c.json(await campaignView(ctx, p(c).c)));
   api.post("/api/campaigns/:c/sync", async (c) => {
     const result = await fleet.sync(ctx, p(c).c);
+    const campaign = await fleet.readCampaign(ctx, p(c).c);
+    for (const d of result.diverged) console.warn(`sync ${p(c).c}: ${fleet.divergedText(campaign, d)}`);
     for (const w of result.warnings) console.warn(`sync ${p(c).c}: ${w}`);
     // The sync adds check-only runs to the queue: the fleet starts them.
     if (result.queued > 0) await fleet.ensureFleet(ctx, p(c).c);
@@ -318,6 +322,16 @@ export function app(ctx: fleet.Ctx): Hono {
     const log = await fleet.readPublishLog(ctx, p(c).c, p(c).key);
     if (log === null) fail(404, `the branch ${p(c).key} has no publish.log`);
     return c.text(log);
+  });
+
+  // The commit of the fork replaces the local branch: see `adoptBranch`. The Adopt button of the page asks the person first.
+  api.post(`${branch}/adopt`, async (c) => {
+    const { c: name, key } = p(c);
+    await fleet.needBranch(ctx, await fleet.readCampaign(ctx, name), key);
+    const result = await fleet.adoptBranch(ctx, name, key);
+    for (const w of result.warnings) console.warn(`adopt ${name}/${key}: ${w}`);
+    console.log(`adopt ${name}/${key}: ${result.tip ?? ""}${result.made ? ", run made" : ""}${result.draft ? ", draft made" : ""}`);
+    return c.json(await detail(ctx, name, key));
   });
 
   api.post(`${branch}/worktree`, async (c) => {

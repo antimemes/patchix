@@ -36,10 +36,11 @@ export function syncLine(r: SyncResult): string {
     `${plural(r.prs.length, "draft")} refreshed`,
     plural(r.listed, "branch of the fork", "branches of the fork"),
     `${r.fetched} fetched`,
-    `${plural(r.made, "directory", "directories")} made`,
+    `${plural(r.made, "imported run")} made`,
     `${plural(r.drafts, "draft")} made`,
     `${plural(r.links, "link")} made`,
     `${plural(r.queued, "check-only run")} queued`,
+    ...(r.diverged.length > 0 ? [plural(r.diverged.length, "diverged branch", "diverged branches")] : []),
     ...(r.warnings.length > 0 ? [plural(r.warnings.length, "warning")] : []),
   ].join(" · ");
 }

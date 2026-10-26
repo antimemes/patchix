@@ -1,10 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, screen, waitFor, within } from "storybook/test";
 import type { Campaign } from "@patchix/common";
 import { CampaignPage, filtersKey, type CampaignTab } from "./CampaignPage.tsx";
 import { withMock } from "../mock/client.tsx";
 import { replaceParams } from "../router.ts";
-import { CAMPAIGN, FREE_KEY, HEAD, SHARED, SHARED_ATTRS, at, branch, job, mixed, okRun, runningRun, task, worktreePath } from "../mock/fixtures.ts";
+import { AMENDED, CAMPAIGN, FREE_KEY, HEAD, SHARED, SHARED_ATTRS, at, branch, job, mixed, okRun, runningRun, task, worktreePath } from "../mock/fixtures.ts";
 
 const ISSUE_TASKS = ["anki", "arduino-core", "autopsy", "calibre", "electrum", "gajim", "python3Packages.wassima", "zotero"];
 
@@ -184,6 +184,30 @@ export const FilterInUrl: Story = {
   decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed() }] }))],
   play: async ({ canvas }) => {
     await canvas.findByText("Select the 2 shown tasks");
+  },
+};
+
+export const Diverged: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "After Sync: the repository of patchix has a different commit than the fork for two branches. Each line gives the two commits, the Adopt button and a link to the Publish tab of the branch. Adopt asks first. Then the commit of the fork replaces the local branch, and the line goes away.",
+      },
+    },
+  },
+  decorators: [withMock(() => ({ campaigns: [{ campaign: CAMPAIGN, synced: at(42), ...mixed(), forks: { calibre: AMENDED, "python3Packages.certifi-embedded": AMENDED } }] }))],
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: "Sync" }));
+    const notice = within(await canvas.findByRole("status", { name: "Diverged branches" }));
+    const line = within((await notice.findByRole("link", { name: "calibre" })).closest("li") as HTMLElement);
+    await line.findByText(HEAD.slice(0, 12));
+    await line.findByText(AMENDED.slice(0, 12));
+    await expect(line.getByRole("link", { name: "Publish tab" })).toHaveAttribute("href", "/c/cacert/b/calibre#publish");
+    await userEvent.click(line.getByRole("button", { name: "Adopt" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Adopt" }));
+    await waitFor(() => expect(notice.queryByRole("link", { name: "calibre" })).toBeNull());
+    await notice.findByRole("link", { name: "python3Packages.certifi-embedded" });
   },
 };
 

@@ -1,7 +1,7 @@
 /** A client without a server, for the stories. It keeps the data in memory and sends the events of the server. */
 import { useState, type ReactNode } from "react";
 import { branchState, taskState, tipChecks, tipProblem } from "@patchix/common/status";
-import type { BranchDetail, BranchView, Campaign, CampaignSummary, CampaignView, CommitProblems, JobStatus, JobsView, Label, SettingsView, Task, TaskView } from "@patchix/common";
+import type { BranchDetail, BranchView, Campaign, CampaignSummary, CampaignView, CommitProblems, Diverged, JobStatus, JobsView, Label, SettingsView, Task, TaskView } from "@patchix/common";
 import { ApiError, type Client, type Signal } from "../api.ts";
 import { ClientProvider } from "../client.tsx";
 import * as f from "./fixtures.ts";
@@ -34,6 +34,11 @@ export interface MockCampaign {
   rejected?: string[];
   /** The branches with a worktree with changes without a commit. See `BranchDetail.clean`. */
   dirty?: string[];
+  /**
+   * The commit of each branch on the fork, as `fork.yaml` of the server. The sync gives a branch with a different
+   * `head` in `SyncResult.diverged`, and the branch page shows it. See `Diverged`.
+   */
+  forks?: Record<string, string>;
   /** The labels of the issue repository. The default is `LABELS`. */
   labels?: Label[];
 }
@@ -69,6 +74,7 @@ interface State {
   commitProblems: Map<string, CommitProblems[]>;
   rejected: Set<string>;
   dirty: Set<string>;
+  forks: Map<string, string>;
   labels: Label[];
 }
 
@@ -92,6 +98,7 @@ export function mockClient(options: MockOptions): Client {
       commitProblems: new Map(Object.entries(m.commitProblems ?? {})),
       rejected: new Set(m.rejected ?? []),
       dirty: new Set(m.dirty ?? []),
+      forks: new Map(Object.entries(m.forks ?? {})),
       labels: m.labels ?? f.LABELS,
     });
   }
@@ -145,6 +152,12 @@ export function mockClient(options: MockOptions): Client {
   /** The entries of the branch for the checks and the description. A branch without entries gets its key. */
   const entriesOf = (b: BranchView) => (b.covers.length > 0 ? b.covers : [b.key]);
 
+  /** As the server: the local commit and the commit of the fork, when they are different. See `BranchDetail.diverged`. */
+  function divergedOf(s: State, b: BranchView): Diverged | null {
+    const fork = s.forks.get(b.key);
+    return fork === undefined || b.head === null || fork === b.head ? null : { key: b.key, local: b.head, fork };
+  }
+
   /** As the server: each read of the branch lints the draft and examines its marks. */
   function detail(s: State, key: string): BranchDetail {
     branchOf(s, key);
@@ -167,6 +180,7 @@ export function mockClient(options: MockOptions): Client {
       publish_log: s.publishLogs.get(key) ?? null,
       commit_problems: s.commitProblems.get(key) ?? [],
       clean: !s.dirty.has(key),
+      diverged: divergedOf(s, b),
     };
   }
   /** The commits of the branch: none without a tip or without a run with a base, as the server. */
@@ -224,12 +238,13 @@ export function mockClient(options: MockOptions): Client {
         [...states.values()].map((s) => ({ name: s.campaign.name, title: s.campaign.title, issue: s.campaign.issue, synced: s.synced, counts: f.count(views(s).tasks), jobs: s.jobs.length, queued: s.queue.length })),
       ),
     campaign: (c) => answer("campaign", () => view(state(c))),
-    // As the server: the numbers of the sync. The mock has no fork: each number of the fork is 0.
+    // As the server: the numbers of the sync. The fork of the mock gets no new branch: each number of the fork is 0. The branches of `forks` with a different commit go into `diverged`.
     sync: (c) =>
       answer("sync", () => {
         const s = state(c);
         s.synced = new Date().toISOString();
-        return { ...view(s), result: { tasks: s.tasks.length, prs: [], listed: 0, fetched: 0, made: 0, drafts: 0, links: 0, queued: 0, warnings: [] } };
+        const diverged = views(s).branches.flatMap((b) => divergedOf(s, b) ?? []);
+        return { ...view(s), result: { tasks: s.tasks.length, prs: [], listed: 0, fetched: 0, made: 0, drafts: 0, links: 0, queued: 0, diverged, warnings: [] } };
       }),
     refresh: (c) => answer("refresh", () => view(state(c))),
     fetchBase: (c) => answer("fetchBase", () => view(state(c))),
@@ -409,6 +424,18 @@ export function mockClient(options: MockOptions): Client {
       answer("removeWorktree", () => {
         const s = state(c);
         branchOf(s, key).worktree = null;
+        changed(s, key);
+        return detail(s, key);
+      }),
+    // As the server: the conditions of `adoptBranch`, then the commit of the fork replaces the local commit. A clean worktree stays, with the new commit.
+    adopt: (c, key) =>
+      answer("adopt", () => {
+        const s = state(c);
+        const b = branchOf(s, key);
+        if (s.jobs.some((j) => j.key === key)) fail(409, `the branch ${key} has a job`);
+        if (s.queue.includes(key)) fail(409, `the branch ${key} is in the queue`);
+        if (b.worktree !== null && s.dirty.has(key)) fail(409, `the worktree of ${key} has changes without a commit: commit or remove them first`);
+        b.head = s.forks.get(key) ?? fail(500, `the fork has no branch ${b.name}`);
         changed(s, key);
         return detail(s, key);
       }),

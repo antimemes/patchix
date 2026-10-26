@@ -10,7 +10,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { adoptBranch, campaignState, listRuns, queueEntries, readDraft, readPr, readTasks, repoPath, runId, sync, writeSettings, type Ctx } from "../src/index.ts";
+import { adoptBranch, campaignState, dequeue, divergedText, listRuns, queueEntries, readCampaign, readDraft, readFork, readPr, readTasks, repoPath, runId, sync, writeSettings, type Ctx } from "../src/index.ts";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd, encoding: "utf8" }).trim();
 
@@ -81,13 +81,21 @@ after(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
+/** The time of `fork.yaml`: see `now`. */
+const TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/;
+
 test("the sync gets the branches of the fork, makes their directories, drafts and links, and queues a check-only run", async () => {
   const result = await sync(ctx, "t");
-  assert.deepEqual(result, { tasks: 4, prs: [], listed: 2, fetched: 2, made: 2, drafts: 1, links: 3, queued: 1, warnings: [] });
+  assert.deepEqual(result, { tasks: 4, prs: [], listed: 2, fetched: 2, made: 2, drafts: 1, links: 3, queued: 1, diverged: [], warnings: [] });
 
   const repo = repoPath(ctx);
   const tips = { foo: git(fork, "rev-parse", "t/foo"), bar: git(fork, "rev-parse", "t/bar") };
   assert.deepEqual([git(repo, "rev-parse", "t/foo"), git(repo, "rev-parse", "t/bar")], [tips.foo, tips.bar], "the repository of patchix has the branches");
+  for (const key of ["foo", "bar"] as const) {
+    const recorded = await readFork(ctx, "t", key);
+    assert.equal(recorded?.sha, tips[key], `${key}: fork.yaml has the commit of the fork`);
+    assert.match(recorded?.time ?? "", TIME);
+  }
   assert.equal(git(repo, "rev-list", "--count", "t/foo"), "2", "the tip and its parent");
   for (const key of ["foo", "bar"] as const) {
     const runs = await listRuns(ctx, "t", key);
@@ -127,7 +135,7 @@ test("the sync gets the branches of the fork, makes their directories, drafts an
   git(repo, "branch", "t/local", master);
   const runs = await listRuns(ctx, "t", "foo");
   const again = await sync(ctx, "t");
-  assert.deepEqual(again, { tasks: 4, prs: [], listed: 2, fetched: 0, made: 0, drafts: 0, links: 0, queued: 0, warnings: [] });
+  assert.deepEqual(again, { tasks: 4, prs: [], listed: 2, fetched: 0, made: 0, drafts: 0, links: 0, queued: 0, diverged: [], warnings: [] });
   assert.deepEqual(await listRuns(ctx, "t", "foo"), runs);
   assert.deepEqual(await readPr(ctx, "t", "foo"), pr);
   assert.deepEqual(await queueEntries(ctx, "t"), queue);
@@ -139,12 +147,34 @@ test("the sync gets the branches of the fork, makes their directories, drafts an
   git(work, "push", "-q", "--force", fork, "t/bar");
   git(work, "checkout", "-q", "master");
   const changed = await sync(ctx, "t");
+  const amended = git(fork, "rev-parse", "t/bar");
   assert.deepEqual([changed.fetched, changed.made, changed.queued], [0, 0, 0]);
-  assert.deepEqual(changed.warnings, ["the repository of patchix has the branch t/bar with a different commit than the fork: the sync does not change it (the adopt command replaces it)"]);
+  assert.deepEqual(changed.diverged, [{ key: "bar", local: tips.bar, fork: amended }], "the diverged branch is in the result, not in the warnings");
+  assert.deepEqual(changed.warnings, []);
+  assert.equal(
+    divergedText(await readCampaign(ctx, "t"), { key: "bar", local: tips.bar, fork: amended }),
+    `the repository of patchix has the branch t/bar at ${tips.bar.slice(0, 12)}, and the fork at ${amended.slice(0, 12)}: the sync does not change it (adopt t bar: replace the local branch with the commit of the fork)`,
+    "the text of the CLI",
+  );
   assert.equal(git(repo, "rev-parse", "t/bar"), tips.bar);
+  assert.equal((await readFork(ctx, "t", "bar"))?.sha, amended, "fork.yaml has the new commit of the fork");
 
   // The adopt command is step 3 for one branch: the person asks for the commit of the fork, and the fetch replaces the branch.
+  // The check-only run of the first sync waits in the queue: it uses the branch, thus the adopt waits for it.
+  await assert.rejects(adoptBranch(ctx, "t", "bar"), { status: 409, message: "the branch bar is in the queue" });
+  assert.equal(git(repo, "rev-parse", "t/bar"), tips.bar);
+  assert.equal(await dequeue(ctx, "t", "bar"), true);
   const adopted = await adoptBranch(ctx, "t", "bar");
-  assert.deepEqual(adopted, { fetched: true, made: false, draft: false, tip: git(fork, "rev-parse", "t/bar"), links: 0, warnings: [] });
-  assert.equal(git(repo, "rev-parse", "t/bar"), git(fork, "rev-parse", "t/bar"));
+  assert.deepEqual(adopted, { fetched: true, made: false, draft: false, tip: amended, diverged: null, links: 0, warnings: [] });
+  assert.equal(git(repo, "rev-parse", "t/bar"), amended);
+  assert.equal((await readFork(ctx, "t", "bar"))?.sha, amended);
+  assert.deepEqual((await sync(ctx, "t")).diverged, [], "after the adopt, the commits are the same");
+
+  // The fork removes a branch: the sync removes its `fork.yaml`, and the local branch does not change.
+  git(work, "push", "-q", fork, "--delete", "t/bar");
+  const removed = await sync(ctx, "t");
+  assert.deepEqual([removed.listed, removed.diverged], [1, []]);
+  assert.equal(await readFork(ctx, "t", "bar"), null);
+  assert.equal((await readFork(ctx, "t", "foo"))?.sha, tips.foo);
+  assert.equal(git(repo, "rev-parse", "t/bar"), amended);
 });

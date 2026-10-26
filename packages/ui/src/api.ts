@@ -79,6 +79,8 @@ export interface Client {
   publishLog(c: string, key: string): Promise<string>;
   makeWorktree(c: string, key: string): Promise<Worktree>;
   removeWorktree(c: string, key: string): Promise<BranchDetail>;
+  /** Replaces the local branch with the commit of the fork. See `POST .../adopt` and `Diverged`. */
+  adopt(c: string, key: string): Promise<BranchDetail>;
   /** The settings of this person and this host: see `SettingsView`. */
   settings(): Promise<SettingsView>;
   saveSettings(input: Settings): Promise<SettingsView>;
@@ -159,6 +161,7 @@ export function httpClient(options: { base?: string } = {}): Client {
     publishLog: (c, key) => text(`${branch(c, key)}/publish-log`),
     makeWorktree: (c, key) => json("POST", `${branch(c, key)}/worktree`),
     removeWorktree: (c, key) => json("DELETE", `${branch(c, key)}/worktree`),
+    adopt: (c, key) => json("POST", `${branch(c, key)}/adopt`),
     settings: () => json("GET", "/api/settings"),
     saveSettings: (input) => json("PUT", "/api/settings", input),
     subscribe(listener) {

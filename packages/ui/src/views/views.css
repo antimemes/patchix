@@ -242,3 +242,8 @@
 .entry-chip.is-plain {
   padding-right: 8px;
 }
+
+/* The error of the Adopt button: it goes on a new line of the row of the button. */
+.adopt-error {
+  flex-basis: 100%;
+}

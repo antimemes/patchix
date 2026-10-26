@@ -743,6 +743,44 @@ export const AddEntry: Story = {
   },
 };
 
+/** The branch `A` with a draft and a clean worktree. The fork has the commit `AMENDED`: the two commits are different. */
+const diverged = (extra: Omit<Partial<MockCampaign>, "branches"> = {}) =>
+  seed(() => branch(A, { runs: [okRun(A, 50)], head: HEAD, worktree: worktreePath(A), pr_meta: prMeta(A) }), { drafts: { [A]: description(A) }, forks: { [A]: AMENDED }, ...extra });
+
+export const Diverged: Story = {
+  parameters: {
+    docs: {
+      description: {
+        story:
+          "The fork has a different commit of the branch than the repository of patchix, for example after a push from a different computer. The notice gives the two commits. Publish tab opens the other direction: when the local commit is newer, the push replaces the branch of the fork. Adopt asks first. Then the commit of the fork replaces the local branch, and the notice goes away.",
+      },
+    },
+  },
+  decorators: [diverged()],
+  play: async ({ canvas, userEvent }) => {
+    const notice = within(await canvas.findByRole("status", { name: "Diverged branch" }));
+    await notice.findByText(HEAD.slice(0, 12));
+    await notice.findByText(AMENDED.slice(0, 12));
+    await userEvent.click(notice.getByRole("button", { name: "Publish tab" }));
+    await expect(await canvas.findByRole("tab", { name: "Publish" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(notice.queryByRole("button", { name: "Publish tab" })).toBeNull());
+    await userEvent.click(notice.getByRole("button", { name: "Adopt" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Adopt" }));
+    await waitFor(() => expect(canvas.queryByRole("status", { name: "Diverged branch" })).toBeNull());
+  },
+};
+
+export const DivergedDirty: Story = {
+  parameters: { docs: { description: { story: "A diverged branch with changes without a commit in the worktree: the server does not adopt the commit of the fork, and the notice gives the error." } } },
+  decorators: [diverged({ dirty: [A] })],
+  play: async ({ canvas, userEvent }) => {
+    const notice = within(await canvas.findByRole("status", { name: "Diverged branch" }));
+    await userEvent.click(notice.getByRole("button", { name: "Adopt" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Adopt" }));
+    await notice.findByText(`Adopt: the worktree of ${A} has changes without a commit: commit or remove them first`);
+  },
+};
+
 export const RemoveEntry: Story = {
   parameters: { docs: { description: { story: "Work tab: the × of a chip removes the entry from the branch, after the dialog. The entry has no branch after this." } } },
   args: { branch: SHARED },

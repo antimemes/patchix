@@ -295,6 +295,21 @@ export const PrSchema = z.object({
 export type Pr = z.infer<typeof PrSchema>;
 
 /**
+ * `state/<campaign>/branches/<key>/fork.yaml`: the commit of the branch on the fork. The sync writes it for each branch
+ * of the fork from `git ls-remote`, and removes it when the fork does not have the branch. The `adopt` command and the
+ * push of `POST .../pr` also write it: after them, the fork has the commit of the repository of patchix. When the
+ * branch of the repository of patchix has a different commit, the branch page shows the two commits: see
+ * `BranchDetail.diverged`.
+ */
+export const ForkSchema = z.object({
+  /** The commit of the branch on the fork. */
+  sha: z.string().min(1),
+  /** When the sync, the `adopt` command or the push read the commit. */
+  time: z.string(),
+});
+export type Fork = z.infer<typeof ForkSchema>;
+
+/**
  * The state of an entry of the task list, calculated from the files. Without `external`, it is also the state of a
  * branch: see `BranchStateSchema`.
  */

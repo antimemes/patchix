@@ -31,6 +31,7 @@ import {
   runDir,
   serial,
   writeDraft,
+  writeFork,
   writePr,
   writePublishLog,
   type Ctx,
@@ -220,8 +221,9 @@ export function publishLogOf(e: unknown): string | null {
 }
 
 /**
- * The commands of `createOrUpdatePr`, after its conditions. Each command and its output go into `log`. The draft gets
- * `confirmed` only at the end, when no command gave an error. `force`: see `push`.
+ * The commands of `createOrUpdatePr`, after its conditions. Each command and its output go into `log`. After the push,
+ * `pushed` and `fork.yaml` get the commit of the branch. The draft gets `confirmed` only at the end, when no command
+ * gave an error. `force`: see `push`.
  */
 async function publish(ctx: Ctx, campaign: Campaign, key: string, git: BranchGit, covers: readonly string[], draft: Pr, body: string, log: Log, confirmed: string, force: boolean): Promise<Pr & { number: number }> {
   const c = campaign.name;
@@ -232,6 +234,8 @@ async function publish(ctx: Ctx, campaign: Campaign, key: string, git: BranchGit
   await push(ctx, branch, draft.pushed, log, force);
   let pr: Pr = { ...draft, pushed: await revParse(repoPath(ctx), `refs/heads/${branch}`) };
   await writePr(ctx, c, key, pr);
+  // After the push, the fork has the commit of the branch: see `BranchDetail.diverged`.
+  if (pr.pushed !== null) await writeFork(ctx, c, key, pr.pushed);
 
   const repo = campaign.issue.repo;
   const dir = await mkdtemp(join(tmpdir(), "patchix-pr-"));

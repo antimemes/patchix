@@ -17,7 +17,7 @@ import { NO_JOBS } from "./JobsStrip.tsx";
 import { PublishTab } from "./PublishTab.tsx";
 import { RunControl } from "./RunControl.tsx";
 import { BranchSection, RunsSection } from "./RunsSection.tsx";
-import { PrCell } from "./shared.tsx";
+import { ADOPT_HELP, AdoptButton, DivergedCommits, PrCell } from "./shared.tsx";
 import "./views.css";
 
 export type PageTab = "work" | "publish";
@@ -84,7 +84,7 @@ export function BranchPage({ campaign: c, branch: key }: { campaign: string; bra
   if (detail.data === null) {
     return detail.error !== null ? <Notice tone="error">{detail.error}</Notice> : <Progress value={null} label="Loading the branch" />;
   }
-  const { branch, campaign } = detail.data;
+  const { branch, campaign, diverged } = detail.data;
   const job = (jobs.data?.jobs ?? []).find((j) => j.key === key) ?? null;
   return (
     <div className="stack">
@@ -111,6 +111,27 @@ export function BranchPage({ campaign: c, branch: key }: { campaign: string; bra
           detail.reload();
         }}
       />
+      {diverged !== null && (
+        <Notice tone="warning" aria-label="Diverged branch">
+          <p>The repository of patchix has a different commit than the fork for this branch. {ADOPT_HELP}</p>
+          <div className="row">
+            <DivergedCommits diverged={diverged} />
+            <AdoptButton
+              campaign={c}
+              diverged={diverged}
+              onAdopted={(next) => {
+                detail.replace(next);
+                view.reload();
+              }}
+            />
+            {tab !== "publish" && (
+              <Button size="sm" variant="ghost" onClick={() => setTab("publish")}>
+                Publish tab
+              </Button>
+            )}
+          </div>
+        </Notice>
+      )}
       {detail.error !== null && <Notice tone="error">{detail.error}</Notice>}
       {jobs.error !== null && <Notice tone="error">Jobs: {jobs.error}</Notice>}
       <Tabs<PageTab>

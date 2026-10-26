@@ -15,8 +15,8 @@
  * - `worktree <campaign> <key>` makes the worktree of the branch and writes its path.
  * - `base <campaign>` gets the newest commit of the `base_branch` with depth 1.
  * - `adopt <campaign> <key>` gets the branch from the fork with depth 2, and replaces the branch of the repository of
- *   patchix. Then it makes the branch directory, the draft and the links as the sync does: step 3 of the sync for one
- *   branch. See `adoptBranch`.
+ *   patchix. Then it makes the run, `fork.yaml`, the draft and the links as the sync does: step 3 of the sync for one
+ *   branch. A clean worktree of the branch is made again from the new commit. See `adoptBranch`.
  * - `draft <campaign> <key>` makes the draft of the pull request of the branch: see `makeDraft`.
  * - `import <campaign> <git-url> [--descriptions <dir>]` gets the branches `<branch_prefix>*` of a different checkout
  *   with depth 2, and makes a run with the tag `imported` for each branch with entries. See `importBranches`.
@@ -38,7 +38,7 @@ import { runFleet } from "./fleet.ts";
 import { makeDraft, refreshPrs, renderDraft } from "./pr.ts";
 import { startRun } from "./run.ts";
 import { context, message, readCampaign } from "./store.ts";
-import { adoptBranch, sync } from "./sync.ts";
+import { adoptBranch, divergedText, sync } from "./sync.ts";
 
 const USAGE = "usage: cli.ts sync|refresh|base|fleet <campaign> | run <campaign> <key> [--check] | worktree|adopt|draft <campaign> <key> | import <campaign> <git-url> [--descriptions <dir>]";
 const options = { descriptions: { type: "string" }, check: { type: "boolean" }, root: { type: "string" }, data: { type: "string" }, path: { type: "string" } } as const;
@@ -57,9 +57,11 @@ async function main(): Promise<number> {
   const [key] = rest;
   if (command === "sync" && rest.length === 0) {
     const r = await sync(ctx, campaign);
+    const definition = await readCampaign(ctx, campaign);
+    for (const d of r.diverged) console.warn(`warning: ${divergedText(definition, d)}`);
     for (const w of r.warnings) console.warn(`warning: ${w}`);
     console.log(`${campaign}: ${r.tasks} tasks; the refresh changed ${r.prs.length} drafts${r.prs.length === 0 ? "" : `: ${r.prs.join(", ")}`}`);
-    console.log(`${campaign}: ${r.listed} branches of the fork, ${r.fetched} fetched, ${r.made} directories made, ${r.drafts} drafts made, ${r.links} links made, ${r.queued} check-only runs queued`);
+    console.log(`${campaign}: ${r.listed} branches of the fork, ${r.fetched} fetched, ${r.made} imported runs made, ${r.drafts} drafts made, ${r.links} links made, ${r.queued} check-only runs queued`);
     if (r.queued > 0) console.log(`the server starts the fleet in 30 seconds or less; without the server, start it with: fleet ${campaign}`);
     return 0;
   }
@@ -83,7 +85,7 @@ async function main(): Promise<number> {
   if (command === "adopt" && key !== undefined && rest.length === 1) {
     const r = await adoptBranch(ctx, campaign, key);
     for (const w of r.warnings) console.warn(`warning: ${w}`);
-    console.log(`${r.tip ?? ""}\n${key}: ${r.made ? "directory made" : "the directory was there"}, ${r.draft ? "draft made" : "no new draft"}, ${r.links} links made`);
+    console.log(`${r.tip ?? ""}\n${key}: ${r.made ? "imported run made" : "the branch had a run"}, ${r.draft ? "draft made" : "no new draft"}, ${r.links} links made`);
     return 0;
   }
   if (command === "worktree" && key !== undefined && rest.length === 1) {

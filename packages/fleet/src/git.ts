@@ -155,7 +155,10 @@ export async function updateBase(ctx: Ctx, campaign: Campaign): Promise<string> 
   return fetchRef(ctx, "origin", campaign.base_branch, 1);
 }
 
-/** Gets the branch of the key from the fork, to continue the work on it. The branch must have no worktree. */
+/**
+ * Gets the branch of the key from the fork, to continue the work on it. The branch must have no worktree: `git` does
+ * not change the branch of a worktree. `adoptBranch` removes a clean worktree first.
+ */
 export async function adopt(ctx: Ctx, campaign: Campaign, key: string): Promise<string> {
   if (await exists(worktreePath(ctx, campaign, key))) fail(409, `the branch ${key} has a worktree; remove it first`);
   await cloneBase(ctx, campaign);

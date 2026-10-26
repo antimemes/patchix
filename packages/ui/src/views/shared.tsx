@@ -1,13 +1,17 @@
-import type { Pr, Run, Task } from "@patchix/common";
+import type { BranchDetail, Diverged, Pr, Run, Task } from "@patchix/common";
 import { ApiError } from "../api.ts";
 import { Badge, StatusBadge } from "../components/Badge.tsx";
+import { Button } from "../components/Button.tsx";
 import { CodeBlock } from "../components/CodeBlock.tsx";
+import { ConfirmDialog } from "../components/ConfirmDialog.tsx";
 import { Link } from "../components/Link.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { Notice } from "../components/Notice.tsx";
 import { Progress } from "../components/Progress.tsx";
-import { pullUrl } from "../format.ts";
-import { useLoad } from "../hooks.ts";
+import { useToast } from "../components/Toast.tsx";
+import { useClient } from "../client.tsx";
+import { pullUrl, short } from "../format.ts";
+import { useAction, useLoad } from "../hooks.ts";
 
 /** The pull request of the draft of the branch. If not, the pull request and the remark of the issue entry. */
 export function PrCell({ meta, task, repo }: { meta: Pr | null; task?: Pick<Task, "pr" | "remark"> | undefined; repo: string }) {
@@ -120,5 +124,50 @@ export function AttachNotice({ tab }: { tab: string }) {
     <Notice tone="info">
       Claude prints its answer when it stops. To watch it work, attach: <code>zellij attach patchix</code>, tab <code>{tab}</code>
     </Notice>
+  );
+}
+
+/** The two directions for a branch with a different commit on the fork: see `Diverged`. The campaign page and the branch page show this text. */
+export const ADOPT_HELP = "Adopt replaces the local branch with the commit of the fork. When the local commit is newer, push it from the Publish tab: the push replaces the branch of the fork.";
+
+/** The two commits of a branch of `Diverged`, as short ids. */
+export function DivergedCommits({ diverged }: { diverged: Diverged }) {
+  return (
+    <span className="small">
+      local <span className="mono">{short(diverged.local)}</span> · fork <span className="mono">{short(diverged.fork)}</span>
+    </span>
+  );
+}
+
+/**
+ * The Adopt button of a branch of `Diverged`. `ConfirmDialog` asks the person first. Then the commit of the fork
+ * replaces the local branch: see `POST .../adopt`. `onAdopted` gets the branch after the adopt.
+ */
+export function AdoptButton({ campaign, diverged, onAdopted }: { campaign: string; diverged: Diverged; onAdopted: (detail: BranchDetail) => void }) {
+  const client = useClient();
+  const toast = useToast();
+  const adopt = useAction(async () => {
+    onAdopted(await client.adopt(campaign, diverged.key));
+    toast(`${diverged.key} has the commit of the fork`, short(diverged.fork));
+  });
+  return (
+    <>
+      <ConfirmDialog
+        trigger={
+          <Button size="sm" pending={adopt.pending} title="Replace the local branch with the commit of the fork.">
+            Adopt
+          </Button>
+        }
+        title={`Replace the local branch ${diverged.key} with the commit of the fork?`}
+        description={`The local branch gets the commit ${short(diverged.fork)} of the fork. The local commit ${short(diverged.local)} is not on the branch after this. A clean worktree is made again from the new commit. A worktree with changes without a commit stops the adopt.`}
+        confirmLabel="Adopt"
+        onConfirm={() => void adopt.run()}
+      />
+      {adopt.error !== null && (
+        <Notice tone="error" className="adopt-error">
+          Adopt: {adopt.error}
+        </Notice>
+      )}
+    </>
   );
 }

@@ -10,6 +10,7 @@ import {
   CAMPAIGN_NAME,
   CampaignSchema,
   FleetSchema,
+  ForkSchema,
   KEY,
   PrSchema,
   RUN_ID,
@@ -20,6 +21,7 @@ import {
   type BranchView,
   type Campaign,
   type Fleet,
+  type Fork,
   type JobStatus,
   type JobsView,
   type Pr,
@@ -526,6 +528,26 @@ export async function readDraft(ctx: Ctx, c: string, key: string): Promise<strin
 
 export async function writeDraft(ctx: Ctx, c: string, key: string, text: string): Promise<void> {
   await writeAtomic(draftFile(ctx, c, key), text);
+}
+
+const forkFile = (ctx: Ctx, c: string, key: string) => join(branchDir(ctx, c, key), "fork.yaml");
+
+/**
+ * `fork.yaml`: the commit of the branch on the fork (see `ForkSchema`). `null` when there is no file or the file is
+ * not correct: the next sync writes it again.
+ */
+export async function readFork(ctx: Ctx, c: string, key: string): Promise<Fork | null> {
+  return readYaml(forkFile(ctx, c, key), ForkSchema).catch(() => null);
+}
+
+/** The sync, the `adopt` command and the push of a pull request write `fork.yaml`, with the time of the write. */
+export async function writeFork(ctx: Ctx, c: string, key: string, sha: string): Promise<void> {
+  await writeYaml(forkFile(ctx, c, key), ForkSchema.parse({ sha, time: now() }));
+}
+
+/** The sync removes `fork.yaml` of a branch that the fork does not have. */
+export async function removeFork(ctx: Ctx, c: string, key: string): Promise<void> {
+  await rm(forkFile(ctx, c, key), { force: true });
 }
 
 const publishLogFile = (ctx: Ctx, c: string, key: string) => join(branchDir(ctx, c, key), "publish.log");
