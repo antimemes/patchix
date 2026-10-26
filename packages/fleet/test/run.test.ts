@@ -9,7 +9,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { CONFIRM_ERROR, tipChecks, type Campaign, type PublishInput } from "@patchix/common";
+import { CONFIRM_ERROR, tipChecks, type Campaign, type PublishInput, type Run } from "@patchix/common";
 import { DONE_RULE } from "../src/run.ts";
 import { parseIssueTasks } from "../src/issue.ts";
 import {
@@ -27,6 +27,7 @@ import {
   isClean,
   listRuns,
   makeDraft,
+  newId,
   publishLogOf,
   push,
   questionFile,
@@ -585,15 +586,46 @@ test("a check-only run starts the checks of the entries of the branch without th
   assert.match(out, new RegExp(`^lib\\.a: ok \\(run ${run.id}, 1 commits, lint -\\)$`, "m"));
   const tip = git(worktreePath(ctx, campaign, "lib.a"), "rev-parse", "HEAD");
   assert.deepEqual([run.status, run.error, run.tags, run.question, run.head, run.commits, run.lint], ["ok", null, ["check"], null, tip, 1, null]);
-  assert.deepEqual([run.attrs, run.checks.map((c) => [c.attr, c.name, c.status])], [["lib.a", "lib.b"], [["lib.a", "harness", "pass"], ["lib.b", "harness", "pass"]]], "the entries of the branch");
+  assert.deepEqual(
+    [run.attrs, run.checks.map((c) => [c.attr, c.name, c.status])],
+    [["lib.a", "lib.b", "unknown.attr", "done"], [["lib.a", "harness", "pass"], ["lib.b", "harness", "pass"]]],
+    "the entries of the branch, then the newest declaration; an attribute that is not in the task list and a done entry get no checks",
+  );
   const dir = runDir(ctx, "t", "lib.a", run.id);
   for (const file of ["reply.md", "prompt.md", "description.md"]) assert.equal(await exists(join(dir, file)), false, `no ${file}`);
   assert.match(await readFile(join(dir, "checks", "lib.b.harness.txt"), "utf8"), /^VERDICT lib\.b emudhra: FIXED /m);
-  assert.match(await readFile(join(dir, "log.txt"), "utf8"), /check-only run: no agent; the checks of lib\.a, lib\.b\n/);
+  assert.match(
+    await readFile(join(dir, "log.txt"), "utf8"),
+    /check-only run: the newest declaration is of the run (\d{8}-\d{6}): lib\.a, lib\.b, unknown\.attr, done\n[^]*\] the run \1: unknown\.attr is not an attribute of the task list: no checks\n[^]*\] the run \1: done is done \(external\): no checks\n[^]*check-only run: no agent; the checks of lib\.a, lib\.b\n/,
+  );
   const git2 = await branchGit(ctx, campaign, "lib.a");
   assert.deepEqual(tipChecks(git2.runs, git2.tip, ["lib.a", "lib.b"]).map((t) => t.run?.id), [run.id, run.id], "the check-only run has the checks of the tip");
 
   // The entry `done` has no branch: the run makes the branch from the base, and the branch has no commit.
   const none = await startRun(ctx, "t", "done", undefined, "check");
   assert.deepEqual([none.status, none.error, none.tags, none.attrs, none.checks, none.head], ["unverified", "no commit", ["check"], ["done"], [], null]);
+});
+
+test("a check-only run starts the checks of the newest declaration, also for an entry that did not link", async () => {
+  await updateTasks(ctx, "t", (file) => (file === null ? null : { ...file, tasks: [...file.tasks, ...parseIssueTasks("- [ ] **pair.a** — `/j`\n- [ ] **pair.b** — `/k`\n")] }));
+  const links = async () => ((await readTasks(ctx, "t"))?.tasks ?? []).filter((t) => t.attr.startsWith("pair.")).map((t) => [t.attr, t.branch]);
+  process.env["PATCHIX_TEST_ATTRS"] = "pair.a pair.b";
+  process.env["PATCHIX_TEST_REFUTE"] = "pair.b";
+  const first = await startRun(ctx, "t", "pair.a").finally(() => {
+    delete process.env["PATCHIX_TEST_ATTRS"];
+    delete process.env["PATCHIX_TEST_REFUTE"];
+  });
+  assert.deepEqual([first.status, first.attrs, first.checks.map((c) => [c.attr, c.status])], ["unverified", ["pair.a", "pair.b"], [["pair.a", "pass"], ["pair.b", "fail"]]]);
+  assert.deepEqual(await links(), [["pair.a", "pair.a"], ["pair.b", null]], "only the entry with checks that pass links");
+  // A check-only run of a previous version declared only the entries of the branch. It is newer than the declaration, but it is not a declaration.
+  const old: Run = { ...first, id: await newId(join(branchDir(ctx, "t", "pair.a"), "runs")), attrs: ["pair.a"], tags: ["check"], status: "ok", checks: first.checks.filter((c) => c.attr === "pair.a"), error: null };
+  await writeRun(ctx, "t", old);
+
+  const run = await startRun(ctx, "t", "pair.a", undefined, "check");
+  assert.deepEqual([run.status, run.error, run.head, run.attrs, run.checks.map((c) => [c.attr, c.status])], ["ok", null, first.head, ["pair.a", "pair.b"], [["pair.a", "pass"], ["pair.b", "pass"]]]);
+  const log = await readFile(join(runDir(ctx, "t", "pair.a", run.id), "log.txt"), "utf8");
+  assert.match(log, new RegExp(`check-only run: the newest declaration is of the run ${first.id}: pair\\.a, pair\\.b\\n[^]*check-only run: no agent; the checks of pair\\.a, pair\\.b\\n[^]*\\] pair\\.b: the entry links to this branch\\n`));
+  assert.deepEqual(await links(), [["pair.a", "pair.a"], ["pair.b", "pair.a"]], "the entry links when its checks pass");
+  const branch = (await campaignState(ctx, "t")).branches.find((b) => b.key === "pair.a");
+  assert.deepEqual([branch?.covers, branch?.state], [["pair.a", "pair.b"], "ready"]);
 });

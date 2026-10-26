@@ -70,6 +70,23 @@ export const DONE_RULE = "Each entry of the tracking issue, with its state and t
 /** The states of a done entry: a declared attribute with such an entry gets no check. */
 export const DONE: readonly TaskState[] = ["merged", "external"];
 
+/** The tag of a check-only run. Such a run is not a declaration: see `startRun`. */
+export const CHECK_TAG = "check";
+
+/**
+ * The attributes of `attrs` that get checks: the entries of the task list that are not done (see `DONE`). The log
+ * gets each other attribute, after `from`.
+ */
+function checkable(attrs: readonly string[], tasks: readonly TaskView[], from: string, log: (line: string) => void): string[] {
+  const states = new Map(tasks.map((t) => [t.attr, t.state]));
+  return attrs.filter((a) => {
+    const state = states.get(a);
+    if (state === undefined) log(`${from}: ${a} is not an attribute of the task list: no checks`);
+    else if (DONE.includes(state)) log(`${from}: ${a} is done (${state}): no checks`);
+    return state !== undefined && !DONE.includes(state);
+  });
+}
+
 /** The state of an entry in the task list of the prompt. `pr` is a pull request that is open. */
 const stateText = (state: TaskState) => (state === "pr" ? "open" : state);
 
@@ -174,7 +191,11 @@ async function buildPrompt(ctx: Ctx, campaign: Campaign, work: Work, run: Run, w
  *
  * With the mode `check`, the run is a check-only run with the tag `check`. It does not start `claude` and does not
  * get the question of the branch. Thus it has no prompt, no reply and no description. It declares the attributes of
- * `checkAttrs`, and starts the checks for each of them on the tip of the branch. Its status has the conditions of a
+ * `checkAttrs`, then each attribute of the newest declaration that is not in that list. The newest declaration is the
+ * `attrs` of the newest previous run of the branch that has attributes and is not a check-only run. Thus an entry that
+ * a run declared gets its checks again, also when it did not link because a check had the result `fail`. The run
+ * starts the checks on the tip of the branch for each attribute of `checkAttrs`, also for a done entry. It also starts
+ * them for each other attribute that is an entry of the task list and is not done. Its status has the conditions of a
  * usual run (see `RunSchema.status`). For example, a branch without commits after the base is `unverified` with the
  * error "no commit".
  */
@@ -189,7 +210,7 @@ export async function startRun(ctx: Ctx, name: string, key: string, signal?: Abo
   const dir = runDir(ctx, name, key, id);
   const check = mode === "check";
   const question = check ? null : await takeQuestion(ctx, name, key, id);
-  const run: Run = { id, key, attrs: [], tags: check ? ["check"] : [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
+  const run: Run = { id, key, attrs: [], tags: check ? [CHECK_TAG] : [], question, started: now(), finished: null, status: "running", model, pid: process.pid, base: "", head: null, commits: 0, checks: [], lint: null, error: null };
   await writeRun(ctx, name, run);
   const out = createWriteStream(join(dir, "log.txt"), { flags: "a" });
   out.on("error", () => undefined);
@@ -225,9 +246,17 @@ async function execute(ctx: Ctx, campaign: Campaign, work: Work, first: Run, dir
     let declared: string[];
     if (work.check) {
       // The entries of the branch: each has a state, and a done entry also gets its checks, for the state of the branch (see `branchState`).
-      declared = checkAttrs(work.tasks, key);
-      known = declared;
-      log(`check-only run: no agent; the checks of ${declared.join(", ") || "no attribute"}`);
+      const own = checkAttrs(work.tasks, key);
+      // A check-only run of a previous version declared only the entries of the branch: thus a check-only run is not a declaration.
+      const newest = earlier.find((r) => r.attrs.length > 0 && !r.tags.includes(CHECK_TAG));
+      const extra = newest?.attrs.filter((a) => !own.includes(a)) ?? [];
+      declared = [...own, ...extra];
+      known = [...own];
+      if (newest !== undefined) {
+        log(`check-only run: the newest declaration is of the run ${newest.id}: ${newest.attrs.join(", ")}`);
+        known.push(...checkable(extra, work.tasks, `the run ${newest.id}`, log));
+      }
+      log(`check-only run: no agent; the checks of ${known.join(", ") || "no attribute"}`);
     } else {
       const once = async (cont: boolean): Promise<StartResult> => {
         const prompt = await buildPrompt(ctx, campaign, work, run, wt.path, dir, !cont);
@@ -257,16 +286,7 @@ async function execute(ctx: Ctx, campaign: Campaign, work: Work, first: Run, dir
       const bad: string[] = [];
       declared = parseAttrs(await readText(join(dir, "attrs.txt")), bad) ?? (work.entry === undefined ? [] : [key]);
       for (const line of bad) log(`attrs.txt: ${JSON.stringify(line.slice(0, 80))} is not an attribute`);
-      const states = new Map(work.tasks.map((t) => [t.attr, t.state]));
-      for (const a of declared) {
-        const state = states.get(a);
-        if (state === undefined) log(`attrs.txt: ${a} is not an attribute of the task list: no checks`);
-        else if (DONE.includes(state)) log(`attrs.txt: ${a} is done (${state}): no checks`);
-      }
-      known = declared.filter((a) => {
-        const state = states.get(a);
-        return state !== undefined && !DONE.includes(state);
-      });
+      known = checkable(declared, work.tasks, "attrs.txt", log);
     }
     run = { ...run, attrs: declared };
 

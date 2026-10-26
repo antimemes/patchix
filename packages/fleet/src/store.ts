@@ -604,8 +604,9 @@ export async function campaignWords(ctx: Ctx, c: string): Promise<string[]> {
 export const coversOf = (tasks: readonly Task[], key: string) => tasks.filter((t) => t.branch === key).map((t) => t.attr);
 
 /**
- * The attributes of a check-only run of the branch `key`: the entries that link to the branch (see `coversOf`). A
- * branch without entries gets its key, when the key is an attribute of the task list.
+ * The entries of the branch `key` for a check-only run: the entries that link to the branch (see `coversOf`). A
+ * branch without entries gets its key, when the key is an attribute of the task list. A check-only run also declares
+ * the newest declaration of the branch: see `startRun`.
  */
 export function checkAttrs(tasks: readonly Task[], key: string): string[] {
   const covers = coversOf(tasks, key);

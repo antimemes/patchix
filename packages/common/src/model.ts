@@ -193,12 +193,15 @@ export const RunSchema = z.preprocess(
      * The attributes of the task list that this change fixes, as the agent gave them in `attrs.txt` of the run
      * directory. Without the file, the key when it is an attribute of the task list. The runner starts the checks for
      * each attribute of the task list in this list. An attribute that is not in the task list stays in the list, but it
-     * gets no check.
+     * gets no check. A check-only run declares the entries of the branch and the newest declaration. The newest
+     * declaration is the `attrs` of the newest previous run with attributes that is not a check-only run. See
+     * `startRun` in the fleet package.
      */
     attrs: z.array(z.string().regex(ATTR)).default([]),
     /**
-     * Marks of the run for the person, for example `imported`. The web page shows each mark. No code examines the
-     * value of a mark: the code uses the other fields of the run.
+     * Marks of the run for the person, for example `imported`. The web page shows each mark. Only the mark `check`
+     * changes the code: a check-only run is not a declaration (see `startRun` in the fleet package). For the other
+     * marks, the code uses the other fields of the run.
      */
     tags: z.array(z.string()).default([]),
     /**
