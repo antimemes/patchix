@@ -1,7 +1,7 @@
 # The command `brotli-check`: the check `scanner` of the `brotli` campaign, for patchix and for a person without a
 # checkout (`nix run github:antimemes/patchix#brotli-check -- <attr> --pr <number>`). check.sh tells the arguments and
 # the verdicts. The commit and the hash of the scanner are in this file.
-{ writeShellApplication, fetchFromGitHub, python3, nix, curl, gnupatch }:
+{ writeShellApplication, fetchFromGitHub, python3, nix, curl, gnupatch, binutils }:
 let
   checker = fetchFromGitHub {
     owner = "trailofbits";
@@ -12,7 +12,7 @@ let
 in
 writeShellApplication {
   name = "brotli-check";
-  runtimeInputs = [ python3 nix curl gnupatch ];
+  runtimeInputs = [ python3 nix curl gnupatch binutils ];
   text = ''
     export SCANNER=${checker}/skills/brotli-checker/scripts/brotli_inventory.py
     export SCANNER_REV=${checker.rev}

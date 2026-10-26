@@ -1,7 +1,7 @@
 #!/bin/sh
 # The check `scanner` of the `brotli` campaign (NixOS/nixpkgs#578375, CVE-2026-111497). `check.nix` makes the command
 # `brotli-check` from this file. It gives the scanner in `$SCANNER`, the commit of the scanner in `$SCANNER_REV`,
-# `verdict.py` in `$VERDICT`, and `python3`, `nix`, `curl` and `patch` in the `PATH`.
+# `verdict.py` in `$VERDICT`, and `python3`, `nix`, `curl`, `patch` and `nm` in the `PATH`.
 #
 # The command builds `<attr>` of two nixpkgs sources, "after" and "before". Then the standalone scanner of
 # `trailofbits/brotli-checker` examines each output, and `verdict.py` compares the two reports. The scanner does not
@@ -22,9 +22,15 @@
 #
 # A copy is an entry of the scanner report that shows the source or the code of the decoder in a file of the package.
 # For example: a source file of the decoder, or its code, its version or its names in a binary. An import of the
-# shared library `libbrotlidec` is not a copy. `verdict.py` has the list of the values of `kind`. A bad copy is a copy
-# without one of these values of `patch_status`: `fixed_source`, `fixed_code_match` or `upstream_fixed_version`. Thus
-# a copy with an unknown version is a bad copy, and its removal is the fix.
+# shared library `libbrotlidec` is not a copy. A reference is also not a copy: the file uses the decoder of a different
+# file. `verdict.py` examines the file of three types of entry to find a reference. A .NET assembly is a reference.
+# It can have `Brotli` in its name or the names of the native functions of the decoder, but not their code.
+# A static library is a reference when `nm` shows no definition of a `Brotli` symbol. When `nm` stops with an error,
+# the library stays a copy. An ELF file with the names of the decoder stays a copy. `verdict.py` cannot open a path in
+# an archive. That entry is a reference only when it has the same bytes as the file of a different reference. If not,
+# it stays a copy. `verdict.py` has the list of the values of `kind`. A bad copy is a copy without one of these values
+# of `patch_status`: `fixed_source`, `fixed_code_match` or `upstream_fixed_version`. Thus a copy with an unknown version
+# is a bad copy, and its removal is the fix.
 #
 # The last line of the output is the verdict:
 #
